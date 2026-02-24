@@ -97,6 +97,22 @@ Options:
   - `export HTTP_PROXY=http://proxy.company:port`
   - `export NO_PROXY=localhost,127.0.0.1,backend`
 
+
+### Coach LLM (LangChain + Google Vertex AI)
+To enable LLM-generated coaching insights, add these values in a backend `.env` file:
+
+```env
+COACH_USE_LLM=true
+GOOGLE_APPLICATION_CREDENTIALS_B64=<base64-encoded-service-account-json>
+GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>
+GOOGLE_CLOUD_LOCATION=us-central1
+COACH_LLM_MODEL=gemini-2.0-flash-001
+```
+
+The backend decodes `GOOGLE_APPLICATION_CREDENTIALS_B64` at runtime, writes it to a temporary JSON credentials file, and uses LangChain's `ChatVertexAI` client for coach report generation.
+
+If these variables are missing, the coach endpoint falls back to deterministic heuristic analysis.
+
 ## API Endpoints
 - `POST /api/games/import/pgn`
 - `POST /api/games/import/chesscom`
@@ -104,4 +120,5 @@ Options:
 - `POST /api/analysis/move`
 - `POST /api/analysis/full`
 - `GET /api/analysis/full/{job_id}`
+- `POST /api/coach/analyze`
 - `DELETE /api/sessions/{game_id}`

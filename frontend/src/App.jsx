@@ -7,6 +7,7 @@ import EvalBar from "./components/EvalBar";
 import ImportPanel from "./components/ImportPanel";
 import MoveInsightsPanel from "./components/MoveInsightsPanel";
 import MoveList from "./components/MoveList";
+import CoachPanel from "./components/CoachPanel";
 
 function buildFenTimeline(initialFen, moves) {
   const chess = new Chess(initialFen);
@@ -69,6 +70,8 @@ export default function App() {
   const [fullStatus, setFullStatus] = useState(null);
   const [prefetchStatus, setPrefetchStatus] = useState({ running: false, done: 0, total: 0 });
   const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState("analyzer");
+  const [coachReport, setCoachReport] = useState(null);
   const analysisRef = useRef({});
   const pendingRequestKeysRef = useRef(new Set());
   const prefetchRunRef = useRef(0);
@@ -294,6 +297,14 @@ export default function App() {
     });
   }
 
+
+  async function handleAnalyzeCoach(payload) {
+    await withLoading(async () => {
+      const report = await api.analyzeCoach(payload);
+      setCoachReport(report);
+    });
+  }
+
   async function handleAnalyzeFull() {
     if (!game) return;
     await withLoading(async () => {
@@ -479,6 +490,23 @@ export default function App() {
 
       {error && <div className="error-banner">{error}</div>}
 
+      {!isFocusMode && (
+        <div className="tab-row">
+          <button
+            className={`tab-btn${activeTab === "analyzer" ? " active" : ""}`}
+            onClick={() => setActiveTab("analyzer")}
+          >
+            Analyzer
+          </button>
+          <button className={`tab-btn${activeTab === "coach" ? " active" : ""}`} onClick={() => setActiveTab("coach")}>
+            Coach
+          </button>
+        </div>
+      )}
+
+      {activeTab === "coach" && !isFocusMode ? (
+        <CoachPanel onAnalyze={handleAnalyzeCoach} loading={loading} report={coachReport} />
+      ) : (
       <div className={isFocusMode ? "focus-stage" : "grid"}>
         {!isFocusMode && (
           <ImportPanel
@@ -539,6 +567,7 @@ export default function App() {
 
         {!isFocusMode && <MoveInsightsPanel analysis={currentAnalysis} />}
       </div>
+      )}
     </main>
   );
 }
