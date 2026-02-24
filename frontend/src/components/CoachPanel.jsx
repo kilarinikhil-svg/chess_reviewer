@@ -3,6 +3,46 @@ import { useState } from "react";
 export default function CoachPanel({ onAnalyze, loading, report }) {
   const [pgn, setPgn] = useState("");
   const [username, setUsername] = useState("");
+  const [selectedFileName, setSelectedFileName] = useState("");
+  const [fileError, setFileError] = useState("");
+
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Failed to read PGN file"));
+      reader.readAsText(file);
+    });
+  }
+
+  async function handleFileChange(event) {
+    const file = event.target.files?.[0];
+    setFileError("");
+
+    if (!file) {
+      setPgn("");
+      setSelectedFileName("");
+      return;
+    }
+
+    const lowerName = file.name.toLowerCase();
+    if (!lowerName.endsWith(".pgn")) {
+      setPgn("");
+      setSelectedFileName("");
+      setFileError("Please upload a .pgn file.");
+      return;
+    }
+
+    try {
+      const fileText = await readFileAsText(file);
+      setPgn(fileText);
+      setSelectedFileName(file.name);
+    } catch (err) {
+      setPgn("");
+      setSelectedFileName("");
+      setFileError(err.message || "Failed to read PGN file.");
+    }
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -12,7 +52,7 @@ export default function CoachPanel({ onAnalyze, loading, report }) {
   return (
     <section className="panel coach-panel">
       <h2>Coach</h2>
-      <p>Paste multiple games and get recurring mistakes, trends, and a 7-day action plan.</p>
+      <p>Upload multiple games in a .pgn file and get recurring mistakes, trends, and a 7-day action plan.</p>
       <form onSubmit={submit}>
         <label htmlFor="coach-username">Player username (optional)</label>
         <input
@@ -21,14 +61,15 @@ export default function CoachPanel({ onAnalyze, loading, report }) {
           onChange={(event) => setUsername(event.target.value)}
           placeholder="nikhil_kilari"
         />
-        <label htmlFor="coach-pgn">Multi-game PGN</label>
-        <textarea
+        <label htmlFor="coach-pgn">Upload PGN file</label>
+        <input
           id="coach-pgn"
-          rows={14}
-          value={pgn}
-          onChange={(event) => setPgn(event.target.value)}
-          placeholder="Paste one or many PGN games here"
+          type="file"
+          accept=".pgn"
+          onChange={handleFileChange}
         />
+        {selectedFileName && <p>Selected: {selectedFileName}</p>}
+        {fileError && <p className="warning">{fileError}</p>}
         <button type="submit" disabled={loading || !pgn.trim()}>
           Analyze Trends
         </button>

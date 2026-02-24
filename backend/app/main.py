@@ -169,6 +169,8 @@ async def coach_analyze(req: CoachAnalysisRequest) -> CoachAnalysisResponse:
         return analyze_multi_game_pgn(req.pgn, req.username)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.delete("/api/sessions/{game_id}")

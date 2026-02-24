@@ -107,11 +107,15 @@ GOOGLE_APPLICATION_CREDENTIALS_B64=<base64-encoded-service-account-json>
 GOOGLE_CLOUD_PROJECT=<your-gcp-project-id>
 GOOGLE_CLOUD_LOCATION=us-central1
 COACH_LLM_MODEL=gemini-2.0-flash-001
+COACH_LLM_MAX_OUTPUT_TOKENS=2048
 ```
 
 The backend decodes `GOOGLE_APPLICATION_CREDENTIALS_B64` at runtime, writes it to a temporary JSON credentials file, and uses LangChain's `ChatVertexAI` client for coach report generation.
+Coach prompt templates are editable in:
+- `backend/app/prompts/coach_system_prompt.md`
+- `backend/app/prompts/coach_human_prompt.md`
 
-If these variables are missing, the coach endpoint falls back to deterministic heuristic analysis.
+If these variables are missing or the LLM response is invalid, the coach endpoint returns an error (LLM-only mode).
 
 ## API Endpoints
 - `POST /api/games/import/pgn`

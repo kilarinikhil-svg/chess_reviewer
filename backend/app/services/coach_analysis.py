@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from collections import Counter
 
 import chess
@@ -14,6 +15,8 @@ from app.models.schemas import (
     CoachPhaseBreakdown,
 )
 from app.services.coach_llm import build_llm_coach_report
+
+logger = logging.getLogger(__name__)
 
 MISTAKE_DEFS = {
     "early_queen": (
@@ -135,62 +138,23 @@ def analyze_multi_game_pgn(pgn_blob: str, username_hint: str | None = None) -> C
             phase_counter["endgame"] += 1
 
     sorted_mistakes = sorted(mistake_counts.items(), key=lambda item: item[1], reverse=True)
-    top_mistakes = []
+    seed_top_mistakes = []
     for key, count in sorted_mistakes[:3]:
         label, description = MISTAKE_DEFS[key]
-        top_mistakes.append(
-            CoachMistakeModel(
-                key=key,
-                label=label,
-                count=count,
-                description=description,
-                examples=mistake_examples[key][:3],
-            )
+        seed_top_mistakes.append(
+            {
+                "key": key,
+                "label": label,
+                "count": count,
+                "description": description,
+                "examples": mistake_examples[key][:3],
+            }
         )
-
-    actions = [
-        CoachActionItem(
-            focus="Tactical blunder prevention",
-            drills=[
-                "Before each move, scan checks-captures-threats for both sides.",
-                "Solve 20 daily puzzles focused on forks, pins, and mate threats.",
-            ],
-        ),
-        CoachActionItem(
-            focus="Opening stability",
-            drills=[
-                "In first 10 moves: prioritize development and king safety over pawn grabs.",
-                "Use one simple setup as White and one as Black for consistency.",
-            ],
-        ),
-        CoachActionItem(
-            focus="Post-game review habit",
-            drills=[
-                "Mark first decisive mistake in each game and write one safer alternative.",
-                "Track whether losses came before move 15, 25, or later.",
-            ],
-        ),
-    ]
-
-    next_game_focus = [
-        "Castle by move 10 whenever possible.",
-        "Avoid moving the queen twice in the opening unless it wins material safely.",
-        "Run a 10-second blunder check before every move.",
-    ]
 
     llm_payload = {
         "player": player,
         "games_analyzed": sum(stat["games"] for stat in color_stats.values()),
-        "top_mistakes": [
-            {
-                "key": m.key,
-                "label": m.label,
-                "count": m.count,
-                "description": m.description,
-                "examples": m.examples,
-            }
-            for m in top_mistakes
-        ],
+        "detected_patterns": seed_top_mistakes,
         "phase_breakdown": {
             "opening": phase_counter.get("opening", 0),
             "middlegame": phase_counter.get("middlegame", 0),
@@ -199,38 +163,17 @@ def analyze_multi_game_pgn(pgn_blob: str, username_hint: str | None = None) -> C
         "color_stats": color_stats,
     }
     llm_report = build_llm_coach_report(llm_payload)
-    if llm_report:
-        if isinstance(llm_report.get("top_mistakes"), list):
-            llm_mistakes = []
-            for idx, item in enumerate(llm_report["top_mistakes"][:3], start=1):
-                llm_mistakes.append(
-                    CoachMistakeModel(
-                        key=f"llm_{idx}",
-                        label=str(item.get("label", "Recurring pattern")),
-                        count=top_mistakes[idx - 1].count if idx - 1 < len(top_mistakes) else 0,
-                        description=str(item.get("description") or item.get("fix") or ""),
-                        examples=[str(ev) for ev in item.get("evidence", [])][:3],
-                    )
-                )
-            if llm_mistakes:
-                top_mistakes = llm_mistakes
+    if not llm_report:
+        raise RuntimeError("LLM coach analysis unavailable. Heuristic fallback is disabled.")
 
-        if isinstance(llm_report.get("action_plan"), list):
-            llm_actions = []
-            for item in llm_report["action_plan"][:3]:
-                llm_actions.append(
-                    CoachActionItem(
-                        focus=str(item.get("focus", "Training focus")),
-                        drills=[str(d) for d in item.get("drills", [])][:4],
-                    )
-                )
-            if llm_actions:
-                actions = llm_actions
+    top_mistakes = _parse_llm_top_mistakes(llm_report)
+    actions = _parse_llm_actions(llm_report)
+    next_game_focus = _parse_llm_next_focus(llm_report)
 
-        if isinstance(llm_report.get("next_game_focus"), list):
-            llm_focus = [str(x) for x in llm_report["next_game_focus"][:3]]
-            if llm_focus:
-                next_game_focus = llm_focus
+    if not top_mistakes or not actions or len(next_game_focus) < 3:
+        raise RuntimeError("LLM response missing required coach sections.")
+
+    logger.info("Coach analysis generated with source=llm")
 
     return CoachAnalysisResponse(
         username=player,
@@ -279,3 +222,59 @@ def _record_mistake(
 ) -> None:
     counts[key] += 1
     examples[key].append(f"Game {game_idx} vs {opponent or 'Unknown'} (ended around ply {plies})")
+
+
+def _parse_llm_top_mistakes(llm_report: dict) -> list[CoachMistakeModel]:
+    raw_items = llm_report.get("top_mistakes")
+    if not isinstance(raw_items, list):
+        return []
+
+    parsed = []
+    for idx, item in enumerate(raw_items[:3], start=1):
+        if not isinstance(item, dict):
+            logger.warning("Ignoring malformed LLM top_mistakes item at index %s", idx)
+            continue
+        evidence_raw = item.get("evidence", [])
+        evidence = [str(x).strip() for x in evidence_raw if str(x).strip()][:3] if isinstance(evidence_raw, list) else []
+        count = _safe_int(item.get("count"), fallback=len(evidence))
+        parsed.append(
+            CoachMistakeModel(
+                key=f"llm_{idx}",
+                label=str(item.get("label", "Recurring pattern")).strip() or "Recurring pattern",
+                count=max(0, count),
+                description=str(item.get("description") or item.get("fix") or "").strip(),
+                examples=evidence,
+            )
+        )
+    return parsed
+
+
+def _parse_llm_actions(llm_report: dict) -> list[CoachActionItem]:
+    raw_items = llm_report.get("action_plan")
+    if not isinstance(raw_items, list):
+        return []
+
+    parsed = []
+    for item in raw_items[:3]:
+        if not isinstance(item, dict):
+            logger.warning("Ignoring malformed LLM action_plan item")
+            continue
+        raw_drills = item.get("drills", [])
+        drills = [str(d).strip() for d in raw_drills if str(d).strip()][:4] if isinstance(raw_drills, list) else []
+        focus = str(item.get("focus", "Training focus")).strip() or "Training focus"
+        parsed.append(CoachActionItem(focus=focus, drills=drills))
+    return parsed
+
+
+def _parse_llm_next_focus(llm_report: dict) -> list[str]:
+    raw_items = llm_report.get("next_game_focus")
+    if not isinstance(raw_items, list):
+        return []
+    return [str(item).strip() for item in raw_items[:3] if str(item).strip()]
+
+
+def _safe_int(value: object, fallback: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback

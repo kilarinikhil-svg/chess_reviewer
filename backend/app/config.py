@@ -84,6 +84,7 @@ class Settings(BaseModel):
     google_cloud_project: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
     google_cloud_location: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
     coach_llm_model: str = os.getenv("COACH_LLM_MODEL", "gemini-2.0-flash-001")
+    coach_llm_max_output_tokens: int = int(os.getenv("COACH_LLM_MAX_OUTPUT_TOKENS", "2048"))
     coach_use_llm: bool = env_bool("COACH_USE_LLM", True)
 
 
