@@ -4,3 +4,6 @@ python-chess==1.999
 httpx==0.28.1
 pydantic==2.11.7
 pytest==8.4.2
+langchain==0.3.27
+langchain-core==0.3.76
+langchain-google-vertexai==2.0.28

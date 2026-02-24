@@ -10,6 +10,8 @@ from app.models.schemas import (
     ChessComImportRequest,
     ChessComImportResponse,
     ChessComSelectRequest,
+    CoachAnalysisRequest,
+    CoachAnalysisResponse,
     FullAnalysisRequest,
     FullAnalysisStartResponse,
     FullAnalysisStatusResponse,
@@ -24,6 +26,7 @@ from app.services.classification import build_suggestion, classify_move, score_t
 from app.services.engine import engine_service
 from app.services.game_parser import parse_pgn_or_fen
 from app.services.session_store import session_store
+from app.services.coach_analysis import analyze_multi_game_pgn
 
 app = FastAPI(title="Chess Analyzer API", version="0.1.0")
 app.add_middleware(
@@ -158,6 +161,16 @@ async def full_status(job_id: str) -> FullAnalysisStatusResponse:
     if not response:
         raise HTTPException(status_code=404, detail="job not found")
     return response
+
+
+@app.post("/api/coach/analyze", response_model=CoachAnalysisResponse)
+async def coach_analyze(req: CoachAnalysisRequest) -> CoachAnalysisResponse:
+    try:
+        return analyze_multi_game_pgn(req.pgn, req.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.delete("/api/sessions/{game_id}")
