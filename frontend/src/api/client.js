@@ -47,4 +47,11 @@ export const api = {
   getFullStatus(jobId) {
     return fetch(`${API_BASE}/api/analysis/full/${jobId}`).then(parseResponse);
   },
+  analyzeCoach(payload) {
+    return fetch(`${API_BASE}/api/coach/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(parseResponse);
+  },
 };

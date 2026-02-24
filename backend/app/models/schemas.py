@@ -90,3 +90,44 @@ class FullAnalysisStatusResponse(BaseModel):
     progress: float
     results_by_ply: list[MoveAnalysisResponse] = Field(default_factory=list)
     error: Optional[str] = None
+
+
+class CoachAnalysisRequest(BaseModel):
+    pgn: str
+    username: Optional[str] = None
+
+
+class CoachMistakeModel(BaseModel):
+    key: str
+    label: str
+    count: int
+    description: str
+    examples: list[str] = Field(default_factory=list)
+
+
+class CoachPhaseBreakdown(BaseModel):
+    opening: int
+    middlegame: int
+    endgame: int
+
+
+class CoachColorStats(BaseModel):
+    games: int
+    wins: int
+    losses: int
+    draws: int
+
+
+class CoachActionItem(BaseModel):
+    focus: str
+    drills: list[str] = Field(default_factory=list)
+
+
+class CoachAnalysisResponse(BaseModel):
+    username: str
+    games_analyzed: int
+    top_mistakes: list[CoachMistakeModel] = Field(default_factory=list)
+    phase_breakdown: CoachPhaseBreakdown
+    color_stats: dict[str, CoachColorStats]
+    action_plan: list[CoachActionItem] = Field(default_factory=list)
+    next_game_focus: list[str] = Field(default_factory=list)

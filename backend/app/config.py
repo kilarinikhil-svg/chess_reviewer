@@ -1,6 +1,27 @@
 import os
 import shutil
+
 from pydantic import BaseModel
+
+
+def load_dotenv_file(path: str = ".env") -> None:
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip("\"").strip("'")
+                os.environ.setdefault(key, value)
+    except OSError:
+        return
+
+
+load_dotenv_file()
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -59,6 +80,11 @@ class Settings(BaseModel):
         "CHESSCOM_USER_AGENT",
         "chess-analyzer/0.1 (+https://github.com/your-org/chess-analyzer)",
     )
+    google_application_credentials_b64: str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_B64", "")
+    google_cloud_project: str = os.getenv("GOOGLE_CLOUD_PROJECT", "")
+    google_cloud_location: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    coach_llm_model: str = os.getenv("COACH_LLM_MODEL", "gemini-2.0-flash-001")
+    coach_use_llm: bool = env_bool("COACH_USE_LLM", True)
 
 
 settings = Settings()
