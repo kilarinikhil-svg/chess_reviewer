@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "9001:9001"
+    environment:
+      - STOCKFISH_PATH=/usr/games/stockfish
+      - STOCKFISH_THREADS=4
+      - STOCKFISH_POOL_SIZE=2
+      - STOCKFISH_HASH_MB=512
+      - ANALYSIS_TIMEOUT_SECONDS=45
+      - CORS_ORIGIN=*
+      - CHESSCOM_SSL_VERIFY=false
+      - CHESSCOM_USER_AGENT=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,backend}
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_PROXY_TARGET=http://backend:9001
+    depends_on:
+      - backend
