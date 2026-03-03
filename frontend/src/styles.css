@@ -94,6 +94,10 @@ button:disabled {
   margin-top: 10px;
 }
 
+.button-row.two-col {
+  grid-template-columns: 1fr 1fr;
+}
+
 .control-row {
   margin-top: 8px;
 }
@@ -154,6 +158,36 @@ button:disabled {
   max-height: 100%;
 }
 
+.hypothetical-board {
+  opacity: 0.84;
+  transition: opacity 140ms ease;
+}
+
+.hypothetical-board::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(20, 90, 50, 0.12), rgba(184, 134, 11, 0.09));
+  pointer-events: none;
+  z-index: 15;
+}
+
+.hypothetical-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 25;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(145deg, rgba(20, 90, 50, 0.95), rgba(12, 58, 34, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 .board-panel {
   position: relative;
 }
@@ -187,6 +221,10 @@ button:disabled {
   grid-template-columns: repeat(8, 1fr);
   grid-template-rows: repeat(8, 1fr);
   pointer-events: none;
+}
+
+.marker-layer-hypothetical {
+  opacity: 0.45;
 }
 
 .square-marker {
@@ -251,6 +289,17 @@ button:disabled {
 
 .board-flip-btn {
   font-size: 0.95rem;
+}
+
+.board-reset-btn {
+  background: #8f1d21;
+}
+
+.hypo-inline-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .focus-stage {
@@ -399,6 +448,30 @@ button:disabled {
   border-radius: 8px;
 }
 
+.hypothetical-status {
+  background: #ecf3ed;
+  border-color: rgba(20, 90, 50, 0.28);
+}
+
+.variation-trail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.variation-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #e4eadf;
+  color: #18452b;
+  border: 1px solid rgba(20, 90, 50, 0.22);
+}
+
 .legend-row {
   display: flex;
   align-items: center;
@@ -425,6 +498,14 @@ button:disabled {
 
 @media (max-width: 700px) {
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .button-row.two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .hypo-inline-controls {
     grid-template-columns: 1fr;
   }
 

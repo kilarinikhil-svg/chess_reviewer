@@ -30,8 +30,16 @@ export const api = {
       body: JSON.stringify({ archive_url, game_index }),
     }).then(parseResponse);
   },
-  analyzeMove(payload) {
+  analyzeMove(payload, options = {}) {
     return fetch(`${API_BASE}/api/analysis/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: options.signal,
+    }).then(parseResponse);
+  },
+  analyzeFen(payload) {
+    return fetch(`${API_BASE}/api/analysis/fen`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

@@ -6,6 +6,15 @@ export default function AnalysisControls({
   onAnalyzeMove,
   onAnalyzeFull,
   onJumpToMistake,
+  isHypothetical,
+  variationTrail,
+  onAnalyzeHypothetical,
+  onUndoHypo,
+  onRedoHypo,
+  onResetHypo,
+  canUndoHypo,
+  canRedoHypo,
+  hypoAnalysisLoading,
   loading,
   fullStatus,
   prefetchStatus,
@@ -44,13 +53,40 @@ export default function AnalysisControls({
       </div>
 
       <div className="button-row">
-        <button disabled={loading} onClick={onAnalyzeMove}>Analyze Selected Move</button>
-        <button disabled={loading} onClick={onAnalyzeFull}>Run Deep Full Analysis</button>
+        <button disabled={loading || isHypothetical} onClick={onAnalyzeMove}>Analyze Selected Move</button>
+        <button disabled={loading || isHypothetical} onClick={onAnalyzeFull}>Run Deep Full Analysis</button>
       </div>
 
       <div className="button-row">
         <button onClick={onJumpToMistake}>Jump to Mistake</button>
       </div>
+
+      {isHypothetical && (
+        <div className="job-status hypothetical-status">
+          <p><strong>Hypothetical Position</strong></p>
+          {variationTrail?.length ? (
+            <div className="variation-trail">
+              {variationTrail.map((move, idx) => (
+                <span className="variation-chip" key={`${move.uci}-${idx}`}>
+                  {idx + 1}. {move.san}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="control-note">No hypothetical moves yet.</p>
+          )}
+          <div className="button-row two-col">
+            <button disabled={!canUndoHypo} onClick={onUndoHypo}>Undo</button>
+            <button disabled={!canRedoHypo} onClick={onRedoHypo}>Redo</button>
+          </div>
+          <div className="button-row two-col">
+            <button disabled={loading || hypoAnalysisLoading} onClick={onAnalyzeHypothetical}>
+              {hypoAnalysisLoading ? "Analyzing..." : "Analyze Hypothetical"}
+            </button>
+            <button disabled={loading} onClick={onResetHypo}>Reset Branch</button>
+          </div>
+        </div>
+      )}
 
       {prefetchStatus?.total > 0 && (
         <div className="job-status">

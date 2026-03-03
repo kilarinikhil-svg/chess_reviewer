@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -7,6 +9,12 @@ from app.services.engine import engine_service
 
 
 client = TestClient(app)
+
+
+def test_root_redirects_to_frontend():
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "http://localhost:5173"
 
 
 def test_import_pgn_and_analyze_move(monkeypatch):
@@ -46,6 +54,83 @@ def test_import_pgn_and_analyze_move(monkeypatch):
 def test_import_fen_invalid():
     response = client.post("/api/games/import/pgn", json={"fen": "invalid"})
     assert response.status_code == 400
+
+
+def test_analyze_move_parallelizes_before_and_after(monkeypatch):
+    pgn = """
+[Event "Parallel Test"]
+[Site "Local"]
+[Date "2026.02.27"]
+[Round "-"]
+[White "A"]
+[Black "B"]
+[Result "*"]
+
+1. e4 e5 2. Nf3 Nc6 *
+"""
+    imported = client.post("/api/games/import/pgn", json={"pgn": pgn}).json()
+
+    state = {"calls": 0, "in_flight": 0, "max_in_flight": 0}
+
+    async def fake_analyze(board, limits):
+        state["calls"] += 1
+        state["in_flight"] += 1
+        state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+        await asyncio.sleep(0.02)
+        state["in_flight"] -= 1
+        if board.turn:
+            return (ScoreModel(type="cp", value=50), "d2d4", ["d2d4"], False)
+        return (ScoreModel(type="cp", value=-10), "g8f6", ["g8f6"], False)
+
+    monkeypatch.setattr(engine_service, "analyze", fake_analyze)
+
+    response = client.post(
+        "/api/analysis/move",
+        json={"game_id": imported["game_id"], "ply": 1, "mode": "realtime", "limits": {"movetime_ms": 300}},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ply"] == 1
+    assert state["calls"] == 2
+    assert state["max_in_flight"] == 2
+
+
+def test_analyze_fen_success(monkeypatch):
+    async def fake_analyze(board, limits):
+        return (ScoreModel(type="cp", value=37), "e2e4", ["e2e4", "e7e5"], False)
+
+    monkeypatch.setattr(engine_service, "analyze", fake_analyze)
+
+    response = client.post(
+        "/api/analysis/fen",
+        json={"fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "limits": {"movetime_ms": 300}},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["score"]["type"] == "cp"
+    assert data["score"]["value"] == 37
+    assert data["best"] == "e4"
+    assert data["pv"] == ["e2e4", "e7e5"]
+    assert data["analysis_incomplete"] is False
+
+
+def test_analyze_fen_invalid_fen_returns_400():
+    response = client.post("/api/analysis/fen", json={"fen": "not-a-fen"})
+    assert response.status_code == 400
+
+
+def test_analyze_fen_engine_error_returns_500(monkeypatch):
+    async def fake_analyze(board, limits):
+        raise RuntimeError("engine unavailable")
+
+    monkeypatch.setattr(engine_service, "analyze", fake_analyze)
+    response = client.post(
+        "/api/analysis/fen",
+        json={"fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "limits": {"movetime_ms": 300}},
+    )
+    assert response.status_code == 500
 
 
 def test_coach_multi_game_analysis(monkeypatch):

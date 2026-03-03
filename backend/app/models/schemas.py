@@ -75,6 +75,19 @@ class MoveAnalysisResponse(BaseModel):
     analysis_incomplete: bool = False
 
 
+class FenAnalysisRequest(BaseModel):
+    fen: str
+    limits: AnalysisLimits = Field(default_factory=AnalysisLimits)
+
+
+class FenAnalysisResponse(BaseModel):
+    fen: str
+    score: ScoreModel
+    best: str
+    pv: list[str]
+    analysis_incomplete: bool = False
+
+
 class FullAnalysisRequest(BaseModel):
     game_id: str
     mode: Literal["deep"] = "deep"

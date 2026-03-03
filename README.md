@@ -59,21 +59,31 @@ docker compose up --build
 Docker URLs:
 - Frontend: `http://localhost:5173`
 - Backend: `http://localhost:9001/health`
+- Backend root (`http://localhost:9001`) redirects to the frontend URL by default.
 
 Docker frontend uses Vite proxy to backend service (`/api` -> `http://backend:9001`),
 so browser requests do not depend on `localhost:9001`.
 
-### Strong Engine Profile
-Current Docker defaults are tuned for stronger analysis:
-- `STOCKFISH_THREADS=4`
-- `STOCKFISH_POOL_SIZE=2` (persistent parallel engine workers)
+### Performance Profile
+Current Docker defaults are tuned for responsive interactive analysis and good throughput:
+- `STOCKFISH_THREADS=2`
+- `STOCKFISH_POOL_SIZE=4` (persistent parallel engine workers)
 - `STOCKFISH_HASH_MB=512`
-- Deep analysis defaults around `depth=24` and `movetime=5000ms`
+- Interactive defaults: `movetime=2000ms`, `depth=20`, `multipv=1`
+- Deep full-analysis defaults remain around `depth=24` and `movetime=5000ms`
+
+Frontend behavior:
+- First launch defaults to `realtime` mode.
+- Last selected mode is persisted in `localStorage["analysis.mode"]` (`realtime|deep`).
+- Background move prefetch uses capped concurrency (`4` in-flight requests) and cancels stale runs.
 
 Speed notes:
-- Deep analysis now analyzes positions in parallel across a persistent Stockfish worker pool.
+- Move analysis computes "before" and "after" positions in parallel for lower per-request latency.
 - Increase throughput by raising `STOCKFISH_POOL_SIZE` and lowering `STOCKFISH_THREADS` per worker.
-- Increase per-move strength by lowering `STOCKFISH_POOL_SIZE` and raising `STOCKFISH_THREADS`.
+- Increase per-request strength by lowering `STOCKFISH_POOL_SIZE` and raising `STOCKFISH_THREADS`.
+- For this project, start with total engine threads near CPU core count:
+  - Throughput-biased: `THREADS=1-2`, higher `POOL_SIZE`
+  - Strength-biased: `THREADS=3-4`, lower `POOL_SIZE`
 
 Optional stronger endgames:
 - Mount Syzygy tablebases and set:

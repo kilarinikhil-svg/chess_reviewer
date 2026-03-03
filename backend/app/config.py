@@ -74,6 +74,7 @@ class Settings(BaseModel):
     deep_job_workers: int = int(os.getenv("DEEP_JOB_WORKERS", "1"))
     analysis_timeout_seconds: int = int(os.getenv("ANALYSIS_TIMEOUT_SECONDS", "45"))
     cors_origin: str = os.getenv("CORS_ORIGIN", "*")
+    frontend_url: str | None = os.getenv("FRONTEND_URL", "http://localhost:5173") or None
     chesscom_ssl_verify: bool = env_bool("CHESSCOM_SSL_VERIFY", True)
     chesscom_ca_bundle: str | None = os.getenv("CHESSCOM_CA_BUNDLE")
     chesscom_user_agent: str = os.getenv(

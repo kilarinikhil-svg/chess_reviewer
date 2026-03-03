@@ -3,14 +3,21 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,backend}
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        no_proxy: ${NO_PROXY:-localhost,127.0.0.1,backend}
     env_file:
       - ./backend/.env
     ports:
       - "9001:9001"
     environment:
       - STOCKFISH_PATH=/usr/games/stockfish
-      - STOCKFISH_THREADS=4
-      - STOCKFISH_POOL_SIZE=2
+      - STOCKFISH_THREADS=2
+      - STOCKFISH_POOL_SIZE=4
       - STOCKFISH_HASH_MB=512
       - ANALYSIS_TIMEOUT_SECONDS=45
       - CORS_ORIGIN=*

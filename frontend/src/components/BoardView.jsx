@@ -22,6 +22,11 @@ export default function BoardView({
   fen,
   boardOrientation,
   isFocusMode,
+  arePiecesDraggable,
+  onPieceDrop,
+  onPieceDragBegin,
+  isHypothetical,
+  hypoControls,
   onToggleFocusMode,
   onFlipBoard,
   customArrows,
@@ -69,17 +74,21 @@ export default function BoardView({
         {isFocusMode ? "✕" : "⛶"}
       </button>
       <div className="board-wrap" ref={wrapRef}>
-        <div className="board-canvas" style={{ width: `${boardSize}px`, height: `${boardSize}px` }}>
+        <div className={`board-canvas${isHypothetical ? " hypothetical-board" : ""}`} style={{ width: `${boardSize}px`, height: `${boardSize}px` }}>
+          {isHypothetical && <div className="hypothetical-badge">Hypothetical</div>}
           <Chessboard
             id="analysis-board"
             position={fen}
-            arePiecesDraggable={false}
+            arePiecesDraggable={Boolean(arePiecesDraggable)}
+            onPieceDrop={onPieceDrop}
+            onPieceDragBegin={onPieceDragBegin}
+            autoPromoteToQueen={true}
             boardWidth={boardSize}
             boardOrientation={boardOrientation}
             customArrows={customArrows || []}
             customSquareStyles={customSquareStyles || {}}
           />
-          <div className="marker-layer">
+          <div className={`marker-layer${isHypothetical ? " marker-layer-hypothetical" : ""}`}>
             {(classMarkers || []).map((marker) => {
               const grid = squareToGrid(marker.square, boardOrientation);
               if (!grid) return null;
@@ -97,6 +106,33 @@ export default function BoardView({
           </div>
         </div>
       </div>
+      {isHypothetical && hypoControls && (
+        <div className="hypo-inline-controls">
+          <button
+            className="board-nav-btn"
+            onClick={hypoControls.onUndo}
+            disabled={!hypoControls.canUndo}
+            title="Undo Hypothetical Move"
+          >
+            Undo
+          </button>
+          <button
+            className="board-nav-btn"
+            onClick={hypoControls.onRedo}
+            disabled={!hypoControls.canRedo}
+            title="Redo Hypothetical Move"
+          >
+            Redo
+          </button>
+          <button
+            className="board-nav-btn board-reset-btn"
+            onClick={hypoControls.onReset}
+            title="Clear Hypothetical Branch"
+          >
+            Reset
+          </button>
+        </div>
+      )}
       <div className="board-nav-row">
         <button
           className="board-nav-btn"

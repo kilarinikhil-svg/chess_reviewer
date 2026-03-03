@@ -1,12 +1,7 @@
 FROM python:3.12-slim
 
 RUN set -eux; \
-    if [ -f /etc/apt/sources.list ]; then \
-      sed -i 's|http://deb.debian.org|https://deb.debian.org|g; s|http://security.debian.org|https://security.debian.org|g' /etc/apt/sources.list; \
-    fi; \
-    find /etc/apt/sources.list.d -type f \( -name '*.list' -o -name '*.sources' \) -exec \
-      sed -i 's|http://deb.debian.org|https://deb.debian.org|g; s|http://security.debian.org|https://security.debian.org|g' {} +; \
-    apt-get update \
+    apt-get update -o Acquire::Retries=5 -o APT::Update::Error-Mode=any \
     && apt-get install -y --no-install-recommends ca-certificates stockfish \
     && rm -rf /var/lib/apt/lists/*
 

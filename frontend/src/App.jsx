@@ -31,6 +31,35 @@ const CLASS_MARKER_META = {
   blunder: { icon: "??", label: "Blunder" },
 };
 
+const ANALYSIS_MODE_KEY = "analysis.mode";
+const VALID_ANALYSIS_MODES = new Set(["realtime", "deep"]);
+const PREFETCH_CONCURRENCY = 4;
+
+function getInitialAnalysisMode() {
+  if (typeof window === "undefined") return "realtime";
+  try {
+    const stored = window.localStorage.getItem(ANALYSIS_MODE_KEY);
+    return VALID_ANALYSIS_MODES.has(stored) ? stored : "realtime";
+  } catch {
+    return "realtime";
+  }
+}
+
+function isAbortError(err) {
+  if (!err) return false;
+  return err.name === "AbortError" || err.code === 20 || (typeof err.message === "string" && err.message.includes("aborted"));
+}
+
+function buildHypotheticalFen(baseFen, moves, cursor) {
+  const chess = new Chess(baseFen);
+  for (let i = 0; i < cursor && i < moves.length; i += 1) {
+    const move = moves[i];
+    const result = chess.move(move.uci);
+    if (!result) break;
+  }
+  return chess.fen();
+}
+
 function parseUciSquares(uci) {
   if (!uci || uci.length < 4) return null;
   return { from: uci.slice(0, 2), to: uci.slice(2, 4) };
@@ -62,8 +91,8 @@ export default function App() {
   const [boardOrientation, setBoardOrientation] = useState("white");
   const [isFocusMode, setIsFocusMode] = useState(false);
   const playerColor = boardOrientation;
-  const [mode, setMode] = useState("deep");
-  const [limits, setLimits] = useState({ movetime_ms: 5000, depth: 24, nodes: null, multipv: 1 });
+  const [mode, setMode] = useState(() => getInitialAnalysisMode());
+  const [limits, setLimits] = useState({ movetime_ms: 2000, depth: 20, nodes: null, multipv: 1 });
   const [analysisByKey, setAnalysisByKey] = useState({});
   const [archives, setArchives] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -72,9 +101,18 @@ export default function App() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("analyzer");
   const [coachReport, setCoachReport] = useState(null);
+  const [isHypothetical, setIsHypothetical] = useState(false);
+  const [hypoBaseFen, setHypoBaseFen] = useState(null);
+  const [hypoFen, setHypoFen] = useState(null);
+  const [hypoMoves, setHypoMoves] = useState([]);
+  const [hypoCursor, setHypoCursor] = useState(0);
+  const [hypoAnalysis, setHypoAnalysis] = useState(null);
+  const [hypoAnalysisLoading, setHypoAnalysisLoading] = useState(false);
+  const [hypoAnalysisError, setHypoAnalysisError] = useState("");
   const analysisRef = useRef({});
-  const pendingRequestKeysRef = useRef(new Set());
+  const pendingRequestsRef = useRef(new Map());
   const prefetchRunRef = useRef(0);
+  const prefetchAbortControllerRef = useRef(null);
   const audioCtxRef = useRef(null);
   const lastMoveSoundPlyRef = useRef(null);
 
@@ -82,6 +120,15 @@ export default function App() {
     () => buildLimitsKey(limits),
     [limits.movetime_ms, limits.depth, limits.nodes, limits.multipv]
   );
+
+  useEffect(() => {
+    if (!VALID_ANALYSIS_MODES.has(mode)) return;
+    try {
+      window.localStorage.setItem(ANALYSIS_MODE_KEY, mode);
+    } catch {
+      // Ignore storage failures and keep in-memory mode.
+    }
+  }, [mode]);
 
   const fenTimeline = useMemo(() => {
     if (!game) return [];
@@ -92,9 +139,11 @@ export default function App() {
     `${analysisMode}:${currentLimitsKey}:${ply}`;
 
   const currentFen = game ? fenTimeline[selectedPly] || game.initial_fen : "start";
+  const displayFen = isHypothetical ? (hypoFen || currentFen) : currentFen;
   const currentAnalysis = analysisByKey[getAnalysisKey(selectedPly)] || null;
   const currentMove = game?.moves?.[selectedPly - 1] || null;
   const currentMoveTarget = parseUciSquares(currentMove?.uci)?.to;
+  const variationTrail = hypoMoves.slice(0, hypoCursor);
 
   const boardMarkings = useMemo(() => {
     const suggestedSquares = parseUciSquares(currentAnalysis?.pv?.[0]);
@@ -202,7 +251,19 @@ export default function App() {
     }
   }
 
+  function resetHypotheticalState() {
+    setIsHypothetical(false);
+    setHypoBaseFen(null);
+    setHypoFen(null);
+    setHypoMoves([]);
+    setHypoCursor(0);
+    setHypoAnalysis(null);
+    setHypoAnalysisLoading(false);
+    setHypoAnalysisError("");
+  }
+
   function resetGameState(imported) {
+    resetHypotheticalState();
     setGame(imported);
     setSelectedPly(1);
     setAnalysisByKey({});
@@ -260,40 +321,173 @@ export default function App() {
     });
   }
 
-  async function analyzeMoveForSession(session, ply, analysisMode, analysisLimits, force = false) {
+  function enterHypotheticalMode() {
+    if (!game) return;
+    if (prefetchAbortControllerRef.current && !prefetchAbortControllerRef.current.signal.aborted) {
+      prefetchAbortControllerRef.current.abort();
+      prefetchAbortControllerRef.current = null;
+      setPrefetchStatus((prev) => ({ ...prev, running: false }));
+    }
+    setIsHypothetical(true);
+    setHypoBaseFen(currentFen);
+    setHypoFen(currentFen);
+    setHypoMoves([]);
+    setHypoCursor(0);
+    setHypoAnalysis(null);
+    setHypoAnalysisError("");
+  }
+
+  function handlePieceDragBegin() {
+    if (!game || isHypothetical) return;
+    enterHypotheticalMode();
+  }
+
+  function handleHypotheticalPieceDrop(sourceSquare, targetSquare) {
+    if (!game || !sourceSquare || !targetSquare) return false;
+
+    const wasHypothetical = isHypothetical;
+    const baseFen = wasHypothetical ? (hypoBaseFen || currentFen) : currentFen;
+    const currentHypoFen = wasHypothetical ? (hypoFen || currentFen) : currentFen;
+    const currentCursor = wasHypothetical ? hypoCursor : 0;
+    const currentMoves = wasHypothetical ? hypoMoves : [];
+
+    const chess = new Chess(currentHypoFen);
+    const move = chess.move({
+      from: sourceSquare,
+      to: targetSquare,
+      promotion: "q",
+    });
+    if (!move) {
+      return false;
+    }
+
+    const record = {
+      san: move.san,
+      uci: move.from + move.to + (move.promotion || ""),
+      fenAfter: chess.fen(),
+    };
+
+    if (!wasHypothetical) {
+      enterHypotheticalMode();
+      setHypoBaseFen(baseFen);
+    }
+    const nextTrail = [...currentMoves.slice(0, currentCursor), record];
+    const nextCursor = currentCursor + 1;
+
+    setHypoMoves(nextTrail);
+    setHypoCursor(nextCursor);
+    setHypoFen(record.fenAfter);
+    setHypoAnalysis(null);
+    setHypoAnalysisError("");
+    return true;
+  }
+
+  function handleUndoHypothetical() {
+    if (!isHypothetical || !hypoBaseFen || hypoCursor <= 0) return;
+    const nextCursor = hypoCursor - 1;
+    setHypoCursor(nextCursor);
+    setHypoFen(buildHypotheticalFen(hypoBaseFen, hypoMoves, nextCursor));
+    setHypoAnalysis(null);
+    setHypoAnalysisError("");
+  }
+
+  function handleRedoHypothetical() {
+    if (!isHypothetical || !hypoBaseFen || hypoCursor >= hypoMoves.length) return;
+    const nextCursor = hypoCursor + 1;
+    setHypoCursor(nextCursor);
+    setHypoFen(buildHypotheticalFen(hypoBaseFen, hypoMoves, nextCursor));
+    setHypoAnalysis(null);
+    setHypoAnalysisError("");
+  }
+
+  async function handleAnalyzeHypothetical() {
+    if (!isHypothetical || !hypoFen) return;
+    setHypoAnalysisLoading(true);
+    setHypoAnalysisError("");
+    try {
+      const result = await api.analyzeFen({
+        fen: hypoFen,
+        limits,
+      });
+      setHypoAnalysis(result);
+    } catch (err) {
+      setHypoAnalysisError(err.message || "Failed to analyze hypothetical position");
+      setHypoAnalysis(null);
+    } finally {
+      setHypoAnalysisLoading(false);
+    }
+  }
+
+  async function analyzeMoveForSession(
+    session,
+    ply,
+    analysisMode,
+    analysisLimits,
+    { force = false, source = "user", signal = null } = {}
+  ) {
     if (!session) return null;
     const key = getAnalysisKey(ply, analysisMode, buildLimitsKey(analysisLimits));
 
     if (!force && analysisRef.current[key]) {
       return analysisRef.current[key];
     }
-    if (pendingRequestKeysRef.current.has(key)) {
-      return null;
+
+    const pending = pendingRequestsRef.current.get(key);
+    if (pending) {
+      if (source === "interactive" && pending.source === "prefetch") {
+        pendingRequestsRef.current.delete(key);
+      } else {
+        return pending.promise;
+      }
     }
 
-    pendingRequestKeysRef.current.add(key);
-    try {
-      const analysis = await api.analyzeMove({
-        game_id: session.game_id,
-        ply,
-        mode: analysisMode,
-        limits: analysisLimits,
-      });
-      setAnalysisByKey((prev) => {
-        const next = force || !prev[key] ? { ...prev, [key]: analysis } : prev;
-        analysisRef.current = next;
-        return next;
-      });
-      return analysis;
-    } finally {
-      pendingRequestKeysRef.current.delete(key);
+    if (source === "interactive") {
+      const prefetchController = prefetchAbortControllerRef.current;
+      if (prefetchController && !prefetchController.signal.aborted) {
+        prefetchController.abort();
+        prefetchAbortControllerRef.current = null;
+        setPrefetchStatus((prev) => ({ ...prev, running: false }));
+      }
     }
+
+    const promise = (async () => {
+      try {
+        const analysis = await api.analyzeMove(
+          {
+            game_id: session.game_id,
+            ply,
+            mode: analysisMode,
+            limits: analysisLimits,
+          },
+          { signal }
+        );
+        setAnalysisByKey((prev) => {
+          const next = force || !prev[key] ? { ...prev, [key]: analysis } : prev;
+          analysisRef.current = next;
+          return next;
+        });
+        return analysis;
+      } catch (err) {
+        if (isAbortError(err)) {
+          return null;
+        }
+        throw err;
+      } finally {
+        const active = pendingRequestsRef.current.get(key);
+        if (active?.promise === promise) {
+          pendingRequestsRef.current.delete(key);
+        }
+      }
+    })();
+
+    pendingRequestsRef.current.set(key, { promise, source });
+    return promise;
   }
 
   async function handleAnalyzeSelectedMove() {
     if (!game || selectedPly < 1 || selectedPly > game.moves.length) return;
     await withLoading(async () => {
-      await analyzeMoveForSession(game, selectedPly, mode, limits, true);
+      await analyzeMoveForSession(game, selectedPly, mode, limits, { force: true, source: "interactive" });
     });
   }
 
@@ -341,11 +535,17 @@ export default function App() {
   }
 
   function goPrev() {
+    if (isHypothetical) {
+      resetHypotheticalState();
+    }
     setSelectedPly((p) => Math.max(1, p - 1));
   }
 
   function goNext() {
     if (!game) return;
+    if (isHypothetical) {
+      resetHypotheticalState();
+    }
     setSelectedPly((p) => Math.min(game.moves.length, p + 1));
   }
 
@@ -356,6 +556,9 @@ export default function App() {
       return cls === "mistake" || cls === "blunder";
     });
     if (move) {
+      if (isHypothetical) {
+        resetHypotheticalState();
+      }
       setSelectedPly(move.ply);
     }
   }
@@ -364,6 +567,9 @@ export default function App() {
     const plies = classMoveBuckets[`${actor}:${classification}`] || [];
     if (!plies.length) return;
     const nextPly = plies.find((ply) => ply > selectedPly) ?? plies[0];
+    if (isHypothetical) {
+      resetHypotheticalState();
+    }
     setSelectedPly(nextPly);
   }
 
@@ -372,56 +578,106 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!game || selectedPly < 1 || selectedPly > game.moves.length) {
-      return;
-    }
-    const key = getAnalysisKey(selectedPly);
-    if (!analysisRef.current[key]) {
-      analyzeMoveForSession(game, selectedPly, mode, limits).catch(() => {});
-    }
+    if (!isHypothetical) return;
+    resetHypotheticalState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPly, game?.game_id, mode, limitsKey]);
+  }, [game?.game_id, selectedPly, mode, limitsKey]);
 
   useEffect(() => {
     if (!game || !game.moves?.length) {
+      if (prefetchAbortControllerRef.current) {
+        prefetchAbortControllerRef.current.abort();
+        prefetchAbortControllerRef.current = null;
+      }
       setPrefetchStatus({ running: false, done: 0, total: 0 });
       return;
     }
 
     const runId = ++prefetchRunRef.current;
     const total = game.moves.length;
+    const abortController = new AbortController();
+    prefetchAbortControllerRef.current = abortController;
+    let nextPly = 1;
+    let doneCount = 0;
+    let failed = false;
+
     setPrefetchStatus({ running: true, done: 0, total });
 
-    (async () => {
-      for (let ply = 1; ply <= total; ply += 1) {
-        if (runId !== prefetchRunRef.current) {
-          return;
-        }
-        try {
-          await analyzeMoveForSession(game, ply, mode, limits);
-        } catch (err) {
-          if (runId === prefetchRunRef.current) {
-            setError(err.message || "Failed to pre-analyze moves");
-            setPrefetchStatus((prev) => ({ ...prev, running: false }));
+    const workerCount = Math.min(PREFETCH_CONCURRENCY, total);
+    const workers = Array.from({ length: workerCount }, () =>
+      (async () => {
+        while (true) {
+          if (runId !== prefetchRunRef.current || abortController.signal.aborted || failed) {
+            return;
           }
-          return;
+          const ply = nextPly;
+          nextPly += 1;
+          if (ply > total) {
+            return;
+          }
+          try {
+            await analyzeMoveForSession(game, ply, mode, limits, {
+              source: "prefetch",
+              signal: abortController.signal,
+            });
+          } catch (err) {
+            if (isAbortError(err) || abortController.signal.aborted || runId !== prefetchRunRef.current) {
+              return;
+            }
+            failed = true;
+            setError(err.message || "Failed to pre-analyze moves");
+            return;
+          }
+          if (runId !== prefetchRunRef.current || abortController.signal.aborted || failed) {
+            return;
+          }
+          doneCount += 1;
+          setPrefetchStatus({ running: true, done: doneCount, total });
         }
-        if (runId !== prefetchRunRef.current) {
-          return;
-        }
-        setPrefetchStatus({ running: true, done: ply, total });
-        await new Promise((resolve) => setTimeout(resolve, 0));
+      })()
+    );
+
+    Promise.all(workers).then(() => {
+      if (runId !== prefetchRunRef.current) {
+        return;
       }
-      if (runId === prefetchRunRef.current) {
-        setPrefetchStatus({ running: false, done: total, total });
+      if (prefetchAbortControllerRef.current === abortController) {
+        prefetchAbortControllerRef.current = null;
       }
-    })();
+      if (failed || abortController.signal.aborted) {
+        setPrefetchStatus((prev) => ({ ...prev, running: false }));
+        return;
+      }
+      setPrefetchStatus({ running: false, done: total, total });
+    });
 
     return () => {
+      abortController.abort();
+      if (prefetchAbortControllerRef.current === abortController) {
+        prefetchAbortControllerRef.current = null;
+      }
+      if (runId === prefetchRunRef.current) {
+        setPrefetchStatus((prev) => ({ ...prev, running: false }));
+      }
       prefetchRunRef.current += 1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game?.game_id, mode, limitsKey]);
+
+  useEffect(() => {
+    if (!game || selectedPly < 1 || selectedPly > game.moves.length) {
+      return;
+    }
+    const key = getAnalysisKey(selectedPly);
+    if (!analysisRef.current[key]) {
+      analyzeMoveForSession(game, selectedPly, mode, limits).catch((err) => {
+        if (!isAbortError(err)) {
+          setError(err.message || "Failed to analyze move");
+        }
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPly, game?.game_id, mode, limitsKey]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -460,6 +716,9 @@ export default function App() {
 
   useEffect(
     () => () => {
+      if (prefetchAbortControllerRef.current) {
+        prefetchAbortControllerRef.current.abort();
+      }
       if (audioCtxRef.current) {
         audioCtxRef.current.close().catch(() => {});
       }
@@ -519,9 +778,20 @@ export default function App() {
         )}
 
         <BoardView
-          fen={currentFen === "start" ? "start" : currentFen}
+          fen={displayFen === "start" ? "start" : displayFen}
           boardOrientation={boardOrientation}
           isFocusMode={isFocusMode}
+          arePiecesDraggable={Boolean(game)}
+          onPieceDrop={handleHypotheticalPieceDrop}
+          onPieceDragBegin={handlePieceDragBegin}
+          isHypothetical={isHypothetical}
+          hypoControls={{
+            onUndo: handleUndoHypothetical,
+            onRedo: handleRedoHypothetical,
+            onReset: resetHypotheticalState,
+            canUndo: hypoCursor > 0,
+            canRedo: hypoCursor < hypoMoves.length,
+          }}
           onToggleFocusMode={toggleFocusMode}
           onFlipBoard={() => setBoardOrientation((o) => (o === "white" ? "black" : "white"))}
           customArrows={boardMarkings.arrows}
@@ -534,7 +804,11 @@ export default function App() {
         />
 
         <EvalBar
-          score={currentAnalysis?.score_after || currentAnalysis?.score_before || null}
+          score={
+            isHypothetical
+              ? (hypoAnalysis?.score || null)
+              : (currentAnalysis?.score_after || currentAnalysis?.score_before || null)
+          }
           markerLegend={CLASS_MARKER_META}
           classCounts={classCounts}
           onClassCountClick={jumpToClassMove}
@@ -550,6 +824,15 @@ export default function App() {
             onAnalyzeMove={handleAnalyzeSelectedMove}
             onAnalyzeFull={handleAnalyzeFull}
             onJumpToMistake={jumpToMistake}
+            isHypothetical={isHypothetical}
+            variationTrail={variationTrail}
+            onAnalyzeHypothetical={handleAnalyzeHypothetical}
+            onUndoHypo={handleUndoHypothetical}
+            onRedoHypo={handleRedoHypothetical}
+            onResetHypo={resetHypotheticalState}
+            canUndoHypo={hypoCursor > 0}
+            canRedoHypo={hypoCursor < hypoMoves.length}
+            hypoAnalysisLoading={hypoAnalysisLoading}
             loading={loading}
             fullStatus={fullStatus}
             prefetchStatus={prefetchStatus}
@@ -561,11 +844,24 @@ export default function App() {
             moves={game?.moves || []}
             selectedPly={selectedPly}
             playerColor={playerColor}
-            onSelectPly={(ply) => setSelectedPly(ply)}
+            onSelectPly={(ply) => {
+              if (isHypothetical) {
+                resetHypotheticalState();
+              }
+              setSelectedPly(ply);
+            }}
           />
         )}
 
-        {!isFocusMode && <MoveInsightsPanel analysis={currentAnalysis} />}
+        {!isFocusMode && (
+          <MoveInsightsPanel
+            analysis={currentAnalysis}
+            isHypothetical={isHypothetical}
+            hypotheticalAnalysis={hypoAnalysis}
+            hypotheticalAnalysisLoading={hypoAnalysisLoading}
+            hypotheticalAnalysisError={hypoAnalysisError}
+          />
+        )}
       </div>
       )}
     </main>

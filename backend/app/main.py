@@ -4,6 +4,7 @@ import asyncio
 import chess
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.config import settings
 from app.models.schemas import (
@@ -12,6 +13,8 @@ from app.models.schemas import (
     ChessComSelectRequest,
     CoachAnalysisRequest,
     CoachAnalysisResponse,
+    FenAnalysisRequest,
+    FenAnalysisResponse,
     FullAnalysisRequest,
     FullAnalysisStartResponse,
     FullAnalysisStatusResponse,
@@ -41,6 +44,13 @@ app.add_middleware(
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    if settings.frontend_url:
+        return RedirectResponse(url=settings.frontend_url, status_code=307)
+    return {"name": "Chess Analyzer API", "health": "/health"}
 
 
 @app.on_event("shutdown")
@@ -100,29 +110,27 @@ async def analyze_move(req: MoveAnalysisRequest) -> MoveAnalysisResponse:
     if req.ply < 1 or req.ply > len(session.moves):
         raise HTTPException(status_code=400, detail="ply out of range")
 
-    board = chess.Board(session.initial_fen)
+    board_before = chess.Board(session.initial_fen)
     for move_model in session.moves[: req.ply - 1]:
-        board.push(chess.Move.from_uci(move_model.uci))
+        board_before.push(chess.Move.from_uci(move_model.uci))
+    played_move = chess.Move.from_uci(session.moves[req.ply - 1].uci)
+    played_san = board_before.san(played_move)
+    board_after = board_before.copy(stack=False)
+    board_after.push(played_move)
 
     try:
-        score_before, best_uci, pv, inc_before = await engine_service.analyze(board, req.limits)
+        (score_before, best_uci, pv, inc_before), (score_after, _, _, inc_after) = await asyncio.gather(
+            engine_service.analyze(board_before, req.limits),
+            engine_service.analyze(board_after, req.limits),
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    played_move = chess.Move.from_uci(session.moves[req.ply - 1].uci)
-    played_san = board.san(played_move)
 
     best_san = best_uci
     if best_uci:
         candidate = chess.Move.from_uci(best_uci)
-        if candidate in board.legal_moves:
-            best_san = board.san(candidate)
-
-    board.push(played_move)
-    try:
-        score_after, _, _, inc_after = await engine_service.analyze(board, req.limits)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if candidate in board_before.legal_moves:
+            best_san = board_before.san(candidate)
 
     before_cp = score_to_cp_equivalent(score_before)
     after_cp = score_to_cp_equivalent(score_after)
@@ -141,6 +149,33 @@ async def analyze_move(req: MoveAnalysisRequest) -> MoveAnalysisResponse:
         pv=pv,
         suggestion=build_suggestion(best_san, classification, delta_cp),
         analysis_incomplete=inc_before or inc_after,
+    )
+
+
+@app.post("/api/analysis/fen", response_model=FenAnalysisResponse)
+async def analyze_fen(req: FenAnalysisRequest) -> FenAnalysisResponse:
+    try:
+        board = chess.Board(req.fen)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid FEN: {exc}") from exc
+
+    try:
+        score, best_uci, pv, incomplete = await engine_service.analyze(board, req.limits)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    best_san = best_uci
+    if best_uci:
+        candidate = chess.Move.from_uci(best_uci)
+        if candidate in board.legal_moves:
+            best_san = board.san(candidate)
+
+    return FenAnalysisResponse(
+        fen=board.fen(),
+        score=score,
+        best=best_san,
+        pv=pv,
+        analysis_incomplete=incomplete,
     )
 
 
