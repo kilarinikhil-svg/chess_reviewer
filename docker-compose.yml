@@ -12,6 +12,8 @@ services:
         no_proxy: ${NO_PROXY:-localhost,127.0.0.1,backend}
     env_file:
       - ./backend/.env
+    volumes:
+      - ./backend/certs:/app/certs:ro
     ports:
       - "9001:9001"
     environment:
@@ -21,11 +23,15 @@ services:
       - STOCKFISH_HASH_MB=512
       - ANALYSIS_TIMEOUT_SECONDS=45
       - CORS_ORIGIN=*
-      - CHESSCOM_SSL_VERIFY=false
+      - CHESSCOM_SSL_VERIFY=${CHESSCOM_SSL_VERIFY:-true}
+      - CHESSCOM_CA_BUNDLE=${CHESSCOM_CA_BUNDLE:-}
       - CHESSCOM_USER_AGENT=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36
       - HTTPS_PROXY=${HTTPS_PROXY:-}
       - HTTP_PROXY=${HTTP_PROXY:-}
       - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,backend}
+      - https_proxy=${HTTPS_PROXY:-}
+      - http_proxy=${HTTP_PROXY:-}
+      - no_proxy=${NO_PROXY:-localhost,127.0.0.1,backend}
 
   frontend:
     image: node:20-alpine

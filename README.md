@@ -90,22 +90,40 @@ Optional stronger endgames:
   - `STOCKFISH_SYZYGY_PATH=/path/to/syzygy`
   - `STOCKFISH_SYZYGY_PROBE_LIMIT=6`
 
-### Chess.com SSL Notes
-If your environment uses a self-signed corporate TLS proxy, Chess.com import can fail with
-`CERTIFICATE_VERIFY_FAILED`.
+### Chess.com Corporate Network Setup
+If Chess.com import fails with one of these:
+- `CERTIFICATE_VERIFY_FAILED`
+- `Blocked by network web filter`
+- `Web Filter Violation` / `Trend Micro`
 
-Options:
-- Set `CHESSCOM_SSL_VERIFY=false` (less secure, but simplest for restricted networks).
-- Prefer secure mode by mounting your corporate CA cert and setting:
-  - `CHESSCOM_CA_BUNDLE=/path/to/ca-bundle.pem`
-  - Keep `CHESSCOM_SSL_VERIFY=true`
-- If Chess.com responds with `403 Forbidden`, set/override a browser-like user agent:
-  - `CHESSCOM_USER_AGENT="Mozilla/5.0 ..."`
-- If response body contains `Web Filter Violation` / `Trend Micro`, this is a network policy block.
-  Configure proxy vars before running Docker:
-  - `export HTTPS_PROXY=http://proxy.company:port`
-  - `export HTTP_PROXY=http://proxy.company:port`
-  - `export NO_PROXY=localhost,127.0.0.1,backend`
+your backend container is behind corporate TLS interception and/or outbound filtering.
+
+Recommended secure setup:
+1. Get your corporate proxy URL and corporate CA bundle (PEM) from IT.
+2. Place the CA bundle file under `backend/certs/` (for example: `backend/certs/corporate-ca.pem`).
+3. Export proxy variables before starting Docker:
+   - `export HTTPS_PROXY=http://proxy.company:port`
+   - `export HTTP_PROXY=http://proxy.company:port`
+   - `export NO_PROXY=localhost,127.0.0.1,backend`
+4. Set backend TLS settings in `backend/.env`:
+   - `CHESSCOM_SSL_VERIFY=true`
+   - `CHESSCOM_CA_BUNDLE=/app/certs/corporate-ca.pem`
+5. Recreate containers:
+   - `docker compose up -d --build --force-recreate`
+
+Diagnostics (from project root):
+```bash
+docker compose exec -T backend python -m app.tools.chesscom_probe --username hikaru
+```
+
+Expected healthy probe:
+- `http_status=200`
+- non-zero `archives_count`
+
+Notes:
+- Docker compose now passes both uppercase and lowercase proxy env vars to backend.
+- `CHESSCOM_SSL_VERIFY=false` is available only as a temporary fallback and is not recommended.
+- If proxy is configured and requests still fail with `403`, ask IT to allow `api.chess.com` through the proxy.
 
 
 ### Coach LLM (LangChain + Google Vertex AI)

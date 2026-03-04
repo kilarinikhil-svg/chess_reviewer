@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from urllib.parse import urlparse
 
 import httpx
@@ -9,6 +10,44 @@ from app.models.schemas import ArchiveModel
 
 
 BASE = "https://api.chess.com/pub/player"
+
+
+def normalize_username(username: str) -> str:
+    candidate = (username or "").strip()
+    if not candidate:
+        raise ValueError("username is required")
+
+    if "://" in candidate:
+        parsed = urlparse(candidate)
+        chunks = [chunk for chunk in parsed.path.split("/") if chunk]
+        if chunks:
+            if chunks[0].lower() in {"member", "player"} and len(chunks) >= 2:
+                candidate = chunks[1]
+            else:
+                candidate = chunks[-1]
+
+    candidate = candidate.strip().lstrip("@").strip().lower()
+    if not candidate:
+        raise ValueError("username is required")
+    return candidate
+
+
+def _proxy_env_hint() -> str:
+    keys = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+    if any((os.getenv(key) or "").strip() for key in keys):
+        return (
+            "Proxy environment variables are set; verify proxy allows api.chess.com and "
+            "configure CHESSCOM_CA_BUNDLE if TLS interception is enabled."
+        )
+    return (
+        "HTTP(S)_PROXY is currently unset in backend runtime. Set HTTP_PROXY/HTTPS_PROXY and "
+        "recreate the backend container."
+    )
+
+
+def _is_web_filter_block(text: str) -> bool:
+    body_preview = text[:500].lower()
+    return "web filter violation" in body_preview or "trend micro" in body_preview
 
 
 def get_ssl_verify_setting() -> bool | str:
@@ -29,20 +68,20 @@ def build_client() -> httpx.AsyncClient:
 
 
 async def fetch_archives(username: str) -> list[ArchiveModel]:
-    normalized_username = username.strip().lower()
+    normalized_username = normalize_username(username)
     url = f"{BASE}/{normalized_username}/games/archives"
     async with build_client() as client:
         response = await client.get(url)
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if response.status_code == 404:
+                raise ValueError(f"Chess.com user '{normalized_username}' not found.") from exc
             if response.status_code == 403:
-                body_preview = response.text[:500].lower()
-                if "web filter violation" in body_preview or "trend micro" in body_preview:
+                if _is_web_filter_block(response.text):
                     raise ValueError(
                         "Blocked by network web filter before reaching Chess.com. "
-                        "Configure HTTP(S)_PROXY for the backend container or ask IT to allow "
-                        "api.chess.com."
+                        f"{_proxy_env_hint()}"
                     ) from exc
                 raise ValueError(
                     "Chess.com returned 403 Forbidden. This is usually network/proxy blocking "
@@ -69,13 +108,13 @@ async def fetch_game_pgn(archive_url: str, game_index: int) -> str:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if response.status_code == 404:
+                raise ValueError("Archive not found on Chess.com.") from exc
             if response.status_code == 403:
-                body_preview = response.text[:500].lower()
-                if "web filter violation" in body_preview or "trend micro" in body_preview:
+                if _is_web_filter_block(response.text):
                     raise ValueError(
                         "Blocked by network web filter while fetching archive games. "
-                        "Configure HTTP(S)_PROXY for backend container or ask IT to allow "
-                        "api.chess.com."
+                        f"{_proxy_env_hint()}"
                     ) from exc
                 raise ValueError(
                     "Chess.com returned 403 Forbidden while fetching games from archive."
