@@ -33,7 +33,33 @@ const CLASS_MARKER_META = {
 
 const ANALYSIS_MODE_KEY = "analysis.mode";
 const VALID_ANALYSIS_MODES = new Set(["realtime", "deep"]);
-const PREFETCH_CONCURRENCY = 4;
+
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+const PREFETCH_BATCH_SIZE = parsePositiveInt(import.meta.env.VITE_PREFETCH_BATCH_SIZE, 4);
+const PREFETCH_CONCURRENCY = parsePositiveInt(import.meta.env.VITE_PREFETCH_CONCURRENCY, 2);
+
+function buildPrefetchOrder(total, centerPly) {
+  const boundedCenter = Math.min(total, Math.max(1, centerPly || 1));
+  const seen = new Set();
+  const ordered = [];
+  const push = (ply) => {
+    if (ply < 1 || ply > total || seen.has(ply)) return;
+    seen.add(ply);
+    ordered.push(ply);
+  };
+
+  push(boundedCenter);
+  for (let offset = 1; ordered.length < total; offset += 1) {
+    push(boundedCenter + offset);
+    push(boundedCenter - offset);
+  }
+  return ordered;
+}
 
 function getInitialAnalysisMode() {
   if (typeof window === "undefined") return "realtime";
@@ -484,6 +510,25 @@ export default function App() {
     }
   }
 
+  function mergeMoveAnalysisResults(results, analysisMode, analysisLimits, { force = false } = {}) {
+    if (!Array.isArray(results) || !results.length) return;
+    const currentLimitsKey = buildLimitsKey(analysisLimits);
+    setAnalysisByKey((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const result of results) {
+        if (!result || typeof result.ply !== "number") continue;
+        const key = getAnalysisKey(result.ply, analysisMode, currentLimitsKey);
+        if (!force && next[key]) continue;
+        next[key] = result;
+        changed = true;
+      }
+      if (!changed) return prev;
+      analysisRef.current = next;
+      return next;
+    });
+  }
+
   async function analyzeMoveForSession(
     session,
     ply,
@@ -500,20 +545,7 @@ export default function App() {
 
     const pending = pendingRequestsRef.current.get(key);
     if (pending) {
-      if (source === "interactive" && pending.source === "prefetch") {
-        pendingRequestsRef.current.delete(key);
-      } else {
-        return pending.promise;
-      }
-    }
-
-    if (source === "interactive") {
-      const prefetchController = prefetchAbortControllerRef.current;
-      if (prefetchController && !prefetchController.signal.aborted) {
-        prefetchController.abort();
-        prefetchAbortControllerRef.current = null;
-        setPrefetchStatus((prev) => ({ ...prev, running: false }));
-      }
+      return pending.promise;
     }
 
     const promise = (async () => {
@@ -527,11 +559,7 @@ export default function App() {
           },
           { signal }
         );
-        setAnalysisByKey((prev) => {
-          const next = force || !prev[key] ? { ...prev, [key]: analysis } : prev;
-          analysisRef.current = next;
-          return next;
-        });
+        mergeMoveAnalysisResults([analysis], analysisMode, analysisLimits, { force });
         return analysis;
       } catch (err) {
         if (isAbortError(err)) {
@@ -663,59 +691,81 @@ export default function App() {
     const total = game.moves.length;
     const abortController = new AbortController();
     prefetchAbortControllerRef.current = abortController;
-    let nextPly = 1;
-    let doneCount = 0;
-    let failed = false;
+    const uncachedPlies = buildPrefetchOrder(total, selectedPly).filter(
+      (ply) => !analysisRef.current[getAnalysisKey(ply)]
+    );
 
-    setPrefetchStatus({ running: true, done: 0, total });
+    let doneCount = total - uncachedPlies.length;
+    setPrefetchStatus({ running: true, done: doneCount, total });
 
-    const workerCount = Math.min(PREFETCH_CONCURRENCY, total);
-    const workers = Array.from({ length: workerCount }, () =>
-      (async () => {
-        while (true) {
-          if (runId !== prefetchRunRef.current || abortController.signal.aborted || failed) {
+    const runPrefetch = async () => {
+      if (!uncachedPlies.length) {
+        setPrefetchStatus({ running: false, done: total, total });
+        return;
+      }
+
+      const chunks = [];
+      for (let i = 0; i < uncachedPlies.length; i += PREFETCH_BATCH_SIZE) {
+        chunks.push(uncachedPlies.slice(i, i + PREFETCH_BATCH_SIZE));
+      }
+      const workerCount = Math.max(1, Math.min(PREFETCH_CONCURRENCY, chunks.length));
+      let nextChunkIdx = 0;
+      let failed = false;
+
+      const runWorker = async () => {
+        while (!failed) {
+          if (runId !== prefetchRunRef.current || abortController.signal.aborted) {
             return;
           }
-          const ply = nextPly;
-          nextPly += 1;
-          if (ply > total) {
+          const chunkIdx = nextChunkIdx;
+          nextChunkIdx += 1;
+          const chunk = chunks[chunkIdx];
+          if (!chunk?.length) {
             return;
           }
           try {
-            await analyzeMoveForSession(game, ply, mode, limits, {
-              source: "prefetch",
-              signal: abortController.signal,
-            });
+            const data = await api.analyzeMovesBatch(
+              {
+                game_id: game.game_id,
+                plies: chunk,
+                mode,
+                limits,
+              },
+              { signal: abortController.signal }
+            );
+            if (runId !== prefetchRunRef.current || abortController.signal.aborted) {
+              return;
+            }
+            mergeMoveAnalysisResults(data?.results_by_ply || [], mode, limits);
+            doneCount += chunk.length;
+            setPrefetchStatus({ running: true, done: Math.min(doneCount, total), total });
           } catch (err) {
             if (isAbortError(err) || abortController.signal.aborted || runId !== prefetchRunRef.current) {
               return;
             }
             failed = true;
             setError(err.message || "Failed to pre-analyze moves");
+            setPrefetchStatus((prev) => ({ ...prev, running: false }));
             return;
           }
-          if (runId !== prefetchRunRef.current || abortController.signal.aborted || failed) {
-            return;
-          }
-          doneCount += 1;
-          setPrefetchStatus({ running: true, done: doneCount, total });
         }
-      })()
-    );
+      };
 
-    Promise.all(workers).then(() => {
-      if (runId !== prefetchRunRef.current) {
+      await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+      if (failed) {
         return;
       }
-      if (prefetchAbortControllerRef.current === abortController) {
-        prefetchAbortControllerRef.current = null;
-      }
-      if (failed || abortController.signal.aborted) {
-        setPrefetchStatus((prev) => ({ ...prev, running: false }));
+
+      if (runId !== prefetchRunRef.current || abortController.signal.aborted) {
         return;
       }
       setPrefetchStatus({ running: false, done: total, total });
-    });
+      if (prefetchAbortControllerRef.current === abortController) {
+        prefetchAbortControllerRef.current = null;
+      }
+    };
+
+    runPrefetch();
 
     return () => {
       abortController.abort();

@@ -89,6 +89,15 @@ export default function MoveInsightsPanel({
                 ? "Use this branch to compare alternatives before committing to the main line."
                 : (active.suggestion || "No suggestion provided.")}
             </p>
+            {!isHypothetical && active.analysis_source && (
+              <p className="control-note">
+                Source: {active.analysis_source}
+                {active.fallback_reason ? ` (fallback: ${active.fallback_reason})` : ""}
+              </p>
+            )}
+            {!isHypothetical && active.explanation && (
+              <p className="control-note">{active.explanation}</p>
+            )}
           </div>
 
           <div className="insight-pv-block">
@@ -107,7 +116,7 @@ export default function MoveInsightsPanel({
           </div>
 
           {active.analysis_incomplete && (
-            <p className="warning">Engine timed out and returned a partial result.</p>
+            <p className="warning">Analysis timed out and returned a partial result.</p>
           )}
         </>
       )}

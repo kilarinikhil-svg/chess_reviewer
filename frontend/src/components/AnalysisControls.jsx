@@ -115,7 +115,7 @@ export default function AnalysisControls({
             <strong>Prefetch</strong>
             <span className="status-value">
               {prefetchStatus.done}/{prefetchStatus.total}
-              {prefetchStatus.running ? " analyzing" : " ready"}
+              {prefetchStatus.running ? " warming insights" : " ready"}
             </span>
           </div>
           <div className="status-meter">
