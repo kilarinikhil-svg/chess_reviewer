@@ -64,6 +64,58 @@ Docker URLs:
 Docker frontend uses Vite proxy to backend service (`/api` -> `http://backend:9001`),
 so browser requests do not depend on `localhost:9001`.
 
+## Production Deploy (Vercel frontend + Render backend)
+
+### 1) Deploy backend on Render (Docker)
+This repo is already ready for Render Docker deploys:
+- Dockerfile: `backend/Dockerfile`
+- Health endpoint: `/health`
+- Render `PORT` binding is supported by the container command.
+
+Render service settings:
+- Service type: `Web Service`
+- Runtime: `Docker`
+- Root directory: `backend`
+- Dockerfile path: `./Dockerfile`
+- Health check path: `/health`
+
+Set backend environment variables in Render:
+- Required:
+  - `CORS_ORIGIN=https://<your-frontend-domain>`
+  - `FRONTEND_URL=https://<your-frontend-domain>`
+- Recommended engine defaults:
+  - `STOCKFISH_THREADS=2`
+  - `STOCKFISH_POOL_SIZE=4`
+  - `STOCKFISH_HASH_MB=512`
+  - `ANALYSIS_TIMEOUT_SECONDS=45`
+- Optional coach LLM:
+  - `COACH_USE_LLM=true`
+  - `GOOGLE_APPLICATION_CREDENTIALS_B64=<base64-service-account-json>`
+  - `GOOGLE_CLOUD_PROJECT=<project-id>`
+  - `GOOGLE_CLOUD_LOCATION=us-central1`
+  - `COACH_LLM_MODEL=gemini-2.0-flash-001`
+  - `COACH_LLM_MAX_OUTPUT_TOKENS=2048`
+
+Use `backend/.env.example` as a reference; keep real secrets only in Render env vars.
+
+### 2) Deploy frontend on Vercel
+Vercel project settings:
+- Root directory: `frontend`
+- Build command: `npm run build`
+- Output directory: `dist`
+
+Set frontend environment variable in Vercel:
+- `VITE_API_BASE=https://<your-render-service>.onrender.com`
+
+Use `frontend/.env.example` as a reference.
+
+### 3) Post-deploy checks
+- Backend health: `https://<your-render-service>.onrender.com/health`
+- Frontend loads from Vercel and can:
+  - import PGN
+  - run move analysis
+  - start and poll full analysis
+
 ### Performance Profile
 Current Docker defaults are tuned for responsive interactive analysis and good throughput:
 - `STOCKFISH_THREADS=2`
