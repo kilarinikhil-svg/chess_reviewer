@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from app.config import settings
-from app.models.schemas import MoveModel
+from app.models.schemas import MoveAnalysisResponse, MoveModel
 
 
 @dataclass
@@ -16,6 +16,8 @@ class GameSession:
     moves: list[MoveModel]
     headers: dict[str, str]
     created_at: float = field(default_factory=time.time)
+    analysis_cache: dict[str, MoveAnalysisResponse] = field(default_factory=dict)
+    cache_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 class SessionStore:

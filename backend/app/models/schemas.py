@@ -72,7 +72,23 @@ class MoveAnalysisResponse(BaseModel):
     classification: Literal["best", "good", "inaccuracy", "mistake", "blunder"]
     pv: list[str]
     suggestion: str
+    analysis_source: Literal["stockfish", "llm"] = "stockfish"
+    explanation: Optional[str] = None
+    confidence: Optional[float] = None
+    themes: list[str] = Field(default_factory=list)
+    fallback_reason: Optional[str] = None
     analysis_incomplete: bool = False
+
+
+class MoveBatchAnalysisRequest(BaseModel):
+    game_id: str
+    plies: list[int] = Field(default_factory=list)
+    mode: Literal["realtime", "deep"] = "realtime"
+    limits: AnalysisLimits = Field(default_factory=AnalysisLimits)
+
+
+class MoveBatchAnalysisResponse(BaseModel):
+    results_by_ply: list[MoveAnalysisResponse] = Field(default_factory=list)
 
 
 class FenAnalysisRequest(BaseModel):

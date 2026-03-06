@@ -1,11 +1,15 @@
 import asyncio
+import threading
+import time
 
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.config import settings
 from app.models.schemas import ScoreModel
 from app.services import coach_llm
 from app.services.engine import engine_service
+from app.services import move_llm
 
 
 client = TestClient(app)
@@ -94,6 +98,343 @@ def test_analyze_move_parallelizes_before_and_after(monkeypatch):
     assert data["ply"] == 1
     assert state["calls"] == 2
     assert state["max_in_flight"] == 2
+
+
+def test_analyze_moves_batch_success(monkeypatch):
+    pgn = """
+[Event "Batch Test"]
+[Site "Local"]
+[Date "2026.03.01"]
+[Round "-"]
+[White "A"]
+[Black "B"]
+[Result "*"]
+
+1. e4 e5 2. Nf3 Nc6 *
+"""
+    imported = client.post("/api/games/import/pgn", json={"pgn": pgn}).json()
+
+    async def fake_analyze(board, limits):
+        if board.turn:
+            return (ScoreModel(type="cp", value=45), "d2d4", ["d2d4"], False)
+        return (ScoreModel(type="cp", value=-20), "g8f6", ["g8f6"], False)
+
+    monkeypatch.setattr(engine_service, "analyze", fake_analyze)
+
+    response = client.post(
+        "/api/analysis/moves-batch",
+        json={
+            "game_id": imported["game_id"],
+            "plies": [1, 2],
+            "mode": "realtime",
+            "limits": {"movetime_ms": 300},
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["results_by_ply"]) == 2
+    assert [item["ply"] for item in data["results_by_ply"]] == [1, 2]
+    assert all(item["analysis_source"] == "stockfish" for item in data["results_by_ply"])
+
+
+def test_analyze_move_uses_llm_when_enabled(monkeypatch):
+    pgn = """
+[Event "LLM Test"]
+[Site "Local"]
+[Date "2026.03.02"]
+[Round "-"]
+[White "A"]
+[Black "B"]
+[Result "*"]
+
+1. e4 e5 *
+"""
+    imported = client.post("/api/games/import/pgn", json={"pgn": pgn}).json()
+    monkeypatch.setattr(settings, "move_use_llm", True)
+    monkeypatch.setattr("app.services.move_analysis.llm_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.services.move_analysis.build_llm_move_report",
+        lambda _payload: {
+            "moves": [
+                {
+                    "ply": 1,
+                    "classification": "good",
+                    "best_uci": "d2d4",
+                    "pv": ["d2d4", "d7d5"],
+                    "suggestion": "Challenge the center quickly.",
+                    "explanation": "d4 grabs central space and keeps development natural.",
+                    "confidence": 0.81,
+                    "themes": ["center control", "development"],
+                }
+            ]
+        },
+    )
+
+    state = {"engine_calls": 0}
+
+    async def fake_analyze(_board, _limits):
+        state["engine_calls"] += 1
+        return (ScoreModel(type="cp", value=0), "e2e4", ["e2e4"], False)
+
+    monkeypatch.setattr(engine_service, "analyze", fake_analyze)
+
+    response = client.post(
+        "/api/analysis/move",
+        json={"game_id": imported["game_id"], "ply": 1, "mode": "realtime", "limits": {"movetime_ms": 300}},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["analysis_source"] == "llm"
+    assert data["classification"] == "good"
+    assert data["best"] == "d4"
+    assert data["explanation"]
+    assert data["score_after"]["type"] == "cp"
+    assert data["score_after"]["value"] == 0
+    assert state["engine_calls"] == 1
+
+
+def test_analyze_move_llm_invalid_item_falls_back_to_stockfish(monkeypatch):
+    pgn = """
+[Event "LLM Fallback Test"]
+[Site "Local"]
+[Date "2026.03.03"]
+[Round "-"]
+[White "A"]
+[Black "B"]
+[Result "*"]
+
+1. e4 e5 *
+"""
+    imported = client.post("/api/games/import/pgn", json={"pgn": pgn}).json()
+    monkeypatch.setattr(settings, "move_use_llm", True)
+    monkeypatch.setattr("app.services.move_analysis.llm_enabled", lambda: True)
+    monkeypatch.setattr(
+        "app.services.move_analysis.build_llm_move_report",
+        lambda _payload: {
+            "moves": [
+                {
+                    "ply": 1,
+                    "classification": "good",
+                    "best_uci": "a1a1",
+                    "pv": [],
+                    "suggestion": "Bad output.",
+                }
+            ]
+        },
+    )
+
+    state = {"engine_calls": 0}
+
+    async def fake_analyze(board, limits):
+        state["engine_calls"] += 1
+        if board.turn:
+            return (ScoreModel(type="cp", value=40), "d2d4", ["d2d4"], False)
+        return (ScoreModel(type="cp", value=-20), "g8f6", ["g8f6"], False)
+
+    monkeypatch.setattr(engine_service, "analyze", fake_analyze)
+
+    response = client.post(
+        "/api/analysis/move",
+        json={"game_id": imported["game_id"], "ply": 1, "mode": "realtime", "limits": {"movetime_ms": 300}},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["analysis_source"] == "stockfish"
+    assert data["fallback_reason"] == "invalid_llm_best_move"
+    assert state["engine_calls"] == 2
+
+
+def test_analyze_moves_batch_llm_chunks_honor_concurrency_limit(monkeypatch):
+    pgn = """
+[Event "LLM Concurrency Test"]
+[Site "Local"]
+[Date "2026.03.03"]
+[Round "-"]
+[White "A"]
+[Black "B"]
+[Result "*"]
+
+1. e4 e5 2. Nf3 Nc6 *
+"""
+    imported = client.post("/api/games/import/pgn", json={"pgn": pgn}).json()
+    monkeypatch.setattr(settings, "move_use_llm", True)
+    monkeypatch.setattr(settings, "move_batch_chunk_size", 1)
+    monkeypatch.setattr(settings, "move_llm_max_concurrency", 2)
+    monkeypatch.setattr(settings, "move_llm_timeout_seconds", 30)
+    monkeypatch.setattr("app.services.move_analysis.llm_enabled", lambda: True)
+
+    state = {"in_flight": 0, "max_in_flight": 0}
+    lock = threading.Lock()
+
+    def fake_llm(payload):
+        with lock:
+            state["in_flight"] += 1
+            state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+        time.sleep(0.05)
+        with lock:
+            state["in_flight"] -= 1
+        move = payload["moves"][0]
+        best_uci = move["legal_uci"][0]
+        return {
+            "moves": [
+                {
+                    "ply": move["ply"],
+                    "classification": "good",
+                    "best_uci": best_uci,
+                    "pv": [best_uci],
+                    "suggestion": "Keep improving the position.",
+                    "explanation": "This keeps play stable.",
+                    "confidence": 0.8,
+                    "themes": ["development"],
+                }
+            ]
+        }
+
+    monkeypatch.setattr("app.services.move_analysis.build_llm_move_report", fake_llm)
+
+    state["engine_calls"] = 0
+
+    async def fake_analyze(_board, _limits):
+        state["engine_calls"] += 1
+        return (ScoreModel(type="cp", value=12), "e2e4", ["e2e4"], False)
+
+    monkeypatch.setattr(engine_service, "analyze", fake_analyze)
+
+    response = client.post(
+        "/api/analysis/moves-batch",
+        json={
+            "game_id": imported["game_id"],
+            "plies": [1, 2, 3, 4],
+            "mode": "realtime",
+            "limits": {"movetime_ms": 300},
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["ply"] for item in data["results_by_ply"]] == [1, 2, 3, 4]
+    assert all(item["analysis_source"] == "llm" for item in data["results_by_ply"])
+    assert state["max_in_flight"] == 2
+    assert state["engine_calls"] == 4
+
+
+def test_analyze_move_llm_timeout_falls_back_to_stockfish(monkeypatch):
+    pgn = """
+[Event "LLM Timeout Test"]
+[Site "Local"]
+[Date "2026.03.04"]
+[Round "-"]
+[White "A"]
+[Black "B"]
+[Result "*"]
+
+1. e4 e5 *
+"""
+    imported = client.post("/api/games/import/pgn", json={"pgn": pgn}).json()
+    monkeypatch.setattr(settings, "move_use_llm", True)
+    monkeypatch.setattr(settings, "move_batch_chunk_size", 1)
+    monkeypatch.setattr(settings, "move_llm_max_concurrency", 2)
+    monkeypatch.setattr(settings, "move_llm_timeout_seconds", 1)
+    monkeypatch.setattr("app.services.move_analysis.llm_enabled", lambda: True)
+
+    def fake_llm(_payload):
+        time.sleep(1.1)
+        return None
+
+    monkeypatch.setattr("app.services.move_analysis.build_llm_move_report", fake_llm)
+
+    state = {"engine_calls": 0}
+
+    async def fake_analyze(board, _limits):
+        state["engine_calls"] += 1
+        if board.turn:
+            return (ScoreModel(type="cp", value=38), "d2d4", ["d2d4"], False)
+        return (ScoreModel(type="cp", value=-10), "g8f6", ["g8f6"], False)
+
+    monkeypatch.setattr(engine_service, "analyze", fake_analyze)
+
+    response = client.post(
+        "/api/analysis/move",
+        json={"game_id": imported["game_id"], "ply": 1, "mode": "realtime", "limits": {"movetime_ms": 300}},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["analysis_source"] == "stockfish"
+    assert data["fallback_reason"] == "llm_timeout"
+    assert state["engine_calls"] == 2
+
+
+def test_analyze_moves_batch_llm_partial_success_keeps_ply_order(monkeypatch):
+    pgn = """
+[Event "LLM Partial Batch Test"]
+[Site "Local"]
+[Date "2026.03.05"]
+[Round "-"]
+[White "A"]
+[Black "B"]
+[Result "*"]
+
+1. e4 e5 2. Nf3 Nc6 *
+"""
+    imported = client.post("/api/games/import/pgn", json={"pgn": pgn}).json()
+    monkeypatch.setattr(settings, "move_use_llm", True)
+    monkeypatch.setattr(settings, "move_batch_chunk_size", 1)
+    monkeypatch.setattr(settings, "move_llm_max_concurrency", 2)
+    monkeypatch.setattr(settings, "move_llm_timeout_seconds", 30)
+    monkeypatch.setattr("app.services.move_analysis.llm_enabled", lambda: True)
+
+    def fake_llm(payload):
+        move = payload["moves"][0]
+        if move["ply"] in {2, 4}:
+            return None
+        best_uci = move["legal_uci"][0]
+        return {
+            "moves": [
+                {
+                    "ply": move["ply"],
+                    "classification": "good",
+                    "best_uci": best_uci,
+                    "pv": [best_uci],
+                    "suggestion": "Solid continuation.",
+                    "explanation": "Keeps development smooth.",
+                    "confidence": 0.74,
+                    "themes": ["initiative"],
+                }
+            ]
+        }
+
+    monkeypatch.setattr("app.services.move_analysis.build_llm_move_report", fake_llm)
+
+    state = {"engine_calls": 0}
+
+    async def fake_analyze(board, _limits):
+        state["engine_calls"] += 1
+        if board.turn:
+            return (ScoreModel(type="cp", value=30), "d2d4", ["d2d4"], False)
+        return (ScoreModel(type="cp", value=-15), "g8f6", ["g8f6"], False)
+
+    monkeypatch.setattr(engine_service, "analyze", fake_analyze)
+
+    response = client.post(
+        "/api/analysis/moves-batch",
+        json={
+            "game_id": imported["game_id"],
+            "plies": [1, 2, 3, 4],
+            "mode": "realtime",
+            "limits": {"movetime_ms": 300},
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["ply"] for item in data["results_by_ply"]] == [1, 2, 3, 4]
+
+    by_ply = {item["ply"]: item for item in data["results_by_ply"]}
+    assert by_ply[1]["analysis_source"] == "llm"
+    assert by_ply[3]["analysis_source"] == "llm"
+    assert by_ply[2]["analysis_source"] == "stockfish"
+    assert by_ply[4]["analysis_source"] == "stockfish"
+    assert by_ply[2]["fallback_reason"] == "llm_batch_failed"
+    assert by_ply[4]["fallback_reason"] == "llm_batch_failed"
+    assert state["engine_calls"] == 6
 
 
 def test_analyze_fen_success(monkeypatch):
@@ -229,4 +570,12 @@ Thanks.
 def test_prompt_templates_allow_literal_braces():
     _, human_prompt = coach_llm._load_prompt_templates()
     assert "{{ ... }}" in human_prompt
+    assert "{payload_json}" in human_prompt
+
+
+def test_move_prompt_templates_allow_literal_braces():
+    _, human_prompt = move_llm._load_prompt_templates()
+    assert "{{" in human_prompt
+    assert "}}" in human_prompt
+    assert '"$schema": "https://json-schema.org/draft/2020-12/schema"' in human_prompt
     assert "{payload_json}" in human_prompt

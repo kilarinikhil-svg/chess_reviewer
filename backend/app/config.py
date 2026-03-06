@@ -87,6 +87,13 @@ class Settings(BaseModel):
     coach_llm_model: str = os.getenv("COACH_LLM_MODEL", "gemini-2.0-flash-001")
     coach_llm_max_output_tokens: int = int(os.getenv("COACH_LLM_MAX_OUTPUT_TOKENS", "2048"))
     coach_use_llm: bool = env_bool("COACH_USE_LLM", True)
+    move_use_llm: bool = env_bool("MOVE_USE_LLM", False)
+    move_llm_model: str = os.getenv("MOVE_LLM_MODEL", "gemini-2.0-flash-001")
+    move_llm_max_output_tokens: int = int(os.getenv("MOVE_LLM_MAX_OUTPUT_TOKENS", "2048"))
+    move_llm_timeout_seconds: int = int(os.getenv("MOVE_LLM_TIMEOUT_SECONDS", "30"))
+    move_batch_chunk_size: int = int(os.getenv("MOVE_BATCH_CHUNK_SIZE", "4"))
+    move_llm_max_concurrency: int = int(os.getenv("MOVE_LLM_MAX_CONCURRENCY", "2"))
+    move_llm_prompt_version: str = os.getenv("MOVE_LLM_PROMPT_VERSION", "v1")
 
 
 settings = Settings()

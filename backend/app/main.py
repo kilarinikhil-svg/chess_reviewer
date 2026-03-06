@@ -20,16 +20,18 @@ from app.models.schemas import (
     FullAnalysisStatusResponse,
     ImportGameResponse,
     ImportPgnRequest,
+    MoveBatchAnalysisRequest,
+    MoveBatchAnalysisResponse,
     MoveAnalysisRequest,
     MoveAnalysisResponse,
 )
 from app.services.analysis_jobs import job_store, run_full_analysis
 from app.services.chesscom import fetch_archives, fetch_game_pgn
-from app.services.classification import build_suggestion, classify_move, score_to_cp_equivalent
+from app.services.coach_analysis import analyze_multi_game_pgn
 from app.services.engine import engine_service
 from app.services.game_parser import parse_pgn_or_fen
+from app.services.move_analysis import move_analysis_service
 from app.services.session_store import session_store
-from app.services.coach_analysis import analyze_multi_game_pgn
 
 app = FastAPI(title="Chess Analyzer API", version="0.1.0")
 app.add_middleware(
@@ -110,46 +112,42 @@ async def analyze_move(req: MoveAnalysisRequest) -> MoveAnalysisResponse:
     if req.ply < 1 or req.ply > len(session.moves):
         raise HTTPException(status_code=400, detail="ply out of range")
 
-    board_before = chess.Board(session.initial_fen)
-    for move_model in session.moves[: req.ply - 1]:
-        board_before.push(chess.Move.from_uci(move_model.uci))
-    played_move = chess.Move.from_uci(session.moves[req.ply - 1].uci)
-    played_san = board_before.san(played_move)
-    board_after = board_before.copy(stack=False)
-    board_after.push(played_move)
+    try:
+        return await move_analysis_service.analyze_move(
+            session=session,
+            ply=req.ply,
+            mode=req.mode,
+            limits=req.limits,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/analysis/moves-batch", response_model=MoveBatchAnalysisResponse)
+async def analyze_moves_batch(req: MoveBatchAnalysisRequest) -> MoveBatchAnalysisResponse:
+    session = session_store.get(req.game_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="game_id not found")
+
+    if not req.plies:
+        return MoveBatchAnalysisResponse(results_by_ply=[])
+
+    if any(ply < 1 or ply > len(session.moves) for ply in req.plies):
+        raise HTTPException(status_code=400, detail="One or more plies are out of range")
 
     try:
-        (score_before, best_uci, pv, inc_before), (score_after, _, _, inc_after) = await asyncio.gather(
-            engine_service.analyze(board_before, req.limits),
-            engine_service.analyze(board_after, req.limits),
+        results = await move_analysis_service.analyze_moves(
+            session=session,
+            plies=req.plies,
+            mode=req.mode,
+            limits=req.limits,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    best_san = best_uci
-    if best_uci:
-        candidate = chess.Move.from_uci(best_uci)
-        if candidate in board_before.legal_moves:
-            best_san = board_before.san(candidate)
-
-    before_cp = score_to_cp_equivalent(score_before)
-    after_cp = score_to_cp_equivalent(score_after)
-    mover_after_cp = -after_cp
-    delta_cp = before_cp - mover_after_cp
-    classification = classify_move(delta_cp, score_before, score_after)
-
-    return MoveAnalysisResponse(
-        ply=req.ply,
-        played=played_san,
-        best=best_san,
-        score_before=score_before,
-        score_after=score_after,
-        delta_cp=delta_cp,
-        classification=classification,
-        pv=pv,
-        suggestion=build_suggestion(best_san, classification, delta_cp),
-        analysis_incomplete=inc_before or inc_after,
-    )
+    return MoveBatchAnalysisResponse(results_by_ply=results)
 
 
 @app.post("/api/analysis/fen", response_model=FenAnalysisResponse)
