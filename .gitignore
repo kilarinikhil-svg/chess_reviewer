@@ -5,3 +5,5 @@ node_modules/
 dist/
 .env
 .pytest_cache/
+backend/certs/*
+!backend/certs/.gitkeep
