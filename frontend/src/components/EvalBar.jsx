@@ -12,10 +12,20 @@ export default function EvalBar({ score, markerLegend, classCounts, onClassCount
     userCount: classCounts?.[key]?.user || 0,
     opponentCount: classCounts?.[key]?.opponent || 0,
   }));
+  const scoreLabel = (() => {
+    if (!score) return "No analysis yet";
+    if (score.type === "mate") return `Mate ${score.value}`;
+    const pawns = (score.value / 100).toFixed(2);
+    return `${score.value > 0 ? "+" : ""}${pawns}`;
+  })();
+  const trendLabel = normalized >= 50 ? "White edge" : "Black edge";
 
   return (
     <section className={`panel eval-panel${isFocusMode ? " focus-eval-panel" : ""}`}>
-      <h2>Evaluation</h2>
+      <div className="panel-head compact">
+        <h2>Evaluation</h2>
+        <p>{trendLabel}</p>
+      </div>
       <div className="eval-panel-body">
         <div className="eval-bar-shell">
           <div className="eval-bar-fill" style={{ height: `${normalized}%` }} />
@@ -24,6 +34,7 @@ export default function EvalBar({ score, markerLegend, classCounts, onClassCount
           {legendItems.map((item) => (
             <div key={item.key} className="eval-class-item" title={item.label}>
               <span className={`legend-class-icon marker-${item.key}`}>{item.icon}</span>
+              <span className="class-count-label">{item.label}</span>
               <button
                 className="class-count-pill user class-count-btn"
                 title={`User ${item.label}`}
@@ -44,9 +55,7 @@ export default function EvalBar({ score, markerLegend, classCounts, onClassCount
           ))}
         </div>
       </div>
-      <div className="eval-text">
-        {score ? `${score.type} ${score.value}` : "No analysis yet"}
-      </div>
+      <div className="eval-text">{scoreLabel}</div>
     </section>
   );
 }

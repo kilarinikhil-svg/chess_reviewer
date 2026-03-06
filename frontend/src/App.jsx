@@ -85,6 +85,13 @@ function getMovePalette(moveColor, playerColor) {
   };
 }
 
+function normalizeHeaderValue(value) {
+  if (value == null) return "";
+  const text = String(value).trim();
+  if (!text || text === "?" || text === "*") return "";
+  return text;
+}
+
 export default function App() {
   const [game, setGame] = useState(null);
   const [selectedPly, setSelectedPly] = useState(1);
@@ -146,6 +153,10 @@ export default function App() {
   const variationTrail = hypoMoves.slice(0, hypoCursor);
 
   const boardMarkings = useMemo(() => {
+    if (isHypothetical) {
+      return { arrows: [], squareStyles: {} };
+    }
+
     const suggestedSquares = parseUciSquares(currentAnalysis?.pv?.[0]);
     const currentSquares = parseUciSquares(currentMove?.uci);
     const palette = getMovePalette(currentMove?.color || "white", playerColor);
@@ -178,7 +189,7 @@ export default function App() {
     }
 
     return { arrows, squareStyles };
-  }, [currentAnalysis?.pv, currentMove?.uci, currentMove?.color, playerColor]);
+  }, [isHypothetical, currentAnalysis?.pv, currentMove?.uci, currentMove?.color, playerColor]);
 
   const classMarkers = useMemo(() => {
     if (!game?.moves?.length || selectedPly < 1 || selectedPly > game.moves.length) return [];
@@ -238,6 +249,66 @@ export default function App() {
     }
     return counts;
   }, [classMoveBuckets]);
+
+  const classificationByPly = useMemo(() => {
+    const byPly = {};
+    if (!game?.moves?.length) return byPly;
+
+    for (let ply = 1; ply <= game.moves.length; ply += 1) {
+      const cls = analysisByKey[`${mode}:${limitsKey}:${ply}`]?.classification;
+      if (cls) byPly[ply] = cls;
+    }
+    return byPly;
+  }, [game?.moves, analysisByKey, mode, limitsKey]);
+
+  const gameSummary = useMemo(() => {
+    if (!game) {
+      return {
+        title: "No game loaded",
+        subtitle: "Import a PGN, FEN, or Chess.com game to begin analysis.",
+        pills: [
+          { label: "Mode", value: mode === "deep" ? "Deep" : "Fast" },
+          { label: "Perspective", value: boardOrientation === "white" ? "White" : "Black" },
+        ],
+      };
+    }
+
+    const headers = game.headers || {};
+    const white = normalizeHeaderValue(headers.White);
+    const black = normalizeHeaderValue(headers.Black);
+    const event = normalizeHeaderValue(headers.Event);
+    const site = normalizeHeaderValue(headers.Site);
+    const rawDate = normalizeHeaderValue(headers.Date);
+    const result = normalizeHeaderValue(headers.Result);
+    const date = rawDate ? rawDate.replace(/\./g, "-") : "";
+    const totalPlies = game.moves?.length || 0;
+    const clampedPly = totalPlies ? Math.min(Math.max(selectedPly, 1), totalPlies) : 0;
+
+    const title =
+      event ||
+      ((white || black)
+        ? `${white || "White"} vs ${black || "Black"}`
+        : "Imported Game");
+
+    const subtitleParts = [];
+    if (white || black) subtitleParts.push(`${white || "White"} vs ${black || "Black"}`);
+    if (site) subtitleParts.push(site);
+    if (date) subtitleParts.push(date);
+
+    const pills = [
+      { label: "Ply", value: `${clampedPly}/${totalPlies || 0}` },
+      { label: "Mode", value: mode === "deep" ? "Deep" : "Fast" },
+      { label: "Perspective", value: boardOrientation === "white" ? "White" : "Black" },
+    ];
+    if (result) pills.unshift({ label: "Result", value: result });
+    if (isHypothetical) pills.push({ label: "Branch", value: "Hypothetical" });
+
+    return {
+      title,
+      subtitle: subtitleParts.join(" • ") || "Ready for move-by-move review",
+      pills,
+    };
+  }, [game, selectedPly, mode, boardOrientation, isHypothetical]);
 
   async function withLoading(fn) {
     setError("");
@@ -335,11 +406,6 @@ export default function App() {
     setHypoCursor(0);
     setHypoAnalysis(null);
     setHypoAnalysisError("");
-  }
-
-  function handlePieceDragBegin() {
-    if (!game || isHypothetical) return;
-    enterHypotheticalMode();
   }
 
   function handleHypotheticalPieceDrop(sourceSquare, targetSquare) {
@@ -742,8 +808,9 @@ export default function App() {
     <main className={`layout${isFocusMode ? " focus-layout" : ""}`}>
       {!isFocusMode && (
         <header className="app-header">
-          <h1>Chess Analyzer</h1>
-          <p>Stockfish-powered move-by-move insights with fast and deep modes.</p>
+          <p className="eyebrow">Chess Analyzer</p>
+          <h1>Tournament Room</h1>
+          <p>Stockfish-powered move review, deep scans, and coaching reports.</p>
         </header>
       )}
 
@@ -766,103 +833,126 @@ export default function App() {
       {activeTab === "coach" && !isFocusMode ? (
         <CoachPanel onAnalyze={handleAnalyzeCoach} loading={loading} report={coachReport} />
       ) : (
-      <div className={isFocusMode ? "focus-stage" : "grid"}>
-        {!isFocusMode && (
-          <ImportPanel
-            onImportPgn={handleImportPgn}
-            onFetchArchives={handleFetchArchives}
-            onSelectArchiveGame={handleSelectArchiveGame}
-            archives={archives}
-            loading={loading}
-          />
-        )}
+        <>
+          {!isFocusMode && (
+            <section className="game-summary-strip">
+              <div className="summary-copy">
+                <p className="summary-title">{gameSummary.title}</p>
+                <p className="summary-subtitle">{gameSummary.subtitle}</p>
+              </div>
+              <div className="summary-pills">
+                {gameSummary.pills.map((pill) => (
+                  <span key={`${pill.label}-${pill.value}`} className="summary-pill">
+                    <strong>{pill.label}</strong>
+                    {pill.value}
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
 
-        <BoardView
-          fen={displayFen === "start" ? "start" : displayFen}
-          boardOrientation={boardOrientation}
-          isFocusMode={isFocusMode}
-          arePiecesDraggable={Boolean(game)}
-          onPieceDrop={handleHypotheticalPieceDrop}
-          onPieceDragBegin={handlePieceDragBegin}
-          isHypothetical={isHypothetical}
-          hypoControls={{
-            onUndo: handleUndoHypothetical,
-            onRedo: handleRedoHypothetical,
-            onReset: resetHypotheticalState,
-            canUndo: hypoCursor > 0,
-            canRedo: hypoCursor < hypoMoves.length,
-          }}
-          onToggleFocusMode={toggleFocusMode}
-          onFlipBoard={() => setBoardOrientation((o) => (o === "white" ? "black" : "white"))}
-          customArrows={boardMarkings.arrows}
-          customSquareStyles={boardMarkings.squareStyles}
-          classMarkers={classMarkers}
-          onPrev={goPrev}
-          onNext={goNext}
-          canPrev={Boolean(game?.moves?.length && selectedPly > 1)}
-          canNext={Boolean(game?.moves?.length && selectedPly < game.moves.length)}
-        />
+          <div className={isFocusMode ? "focus-stage" : "analyzer-shell"}>
+            {!isFocusMode && (
+              <aside className="analyzer-left-rail">
+                <ImportPanel
+                  onImportPgn={handleImportPgn}
+                  onFetchArchives={handleFetchArchives}
+                  onSelectArchiveGame={handleSelectArchiveGame}
+                  archives={archives}
+                  loading={loading}
+                />
+                <AnalysisControls
+                  mode={mode}
+                  setMode={setMode}
+                  limits={limits}
+                  setLimits={setLimits}
+                  onAnalyzeMove={handleAnalyzeSelectedMove}
+                  onAnalyzeFull={handleAnalyzeFull}
+                  onJumpToMistake={jumpToMistake}
+                  isHypothetical={isHypothetical}
+                  variationTrail={variationTrail}
+                  onAnalyzeHypothetical={handleAnalyzeHypothetical}
+                  onUndoHypo={handleUndoHypothetical}
+                  onRedoHypo={handleRedoHypothetical}
+                  onResetHypo={resetHypotheticalState}
+                  canUndoHypo={hypoCursor > 0}
+                  canRedoHypo={hypoCursor < hypoMoves.length}
+                  hypoAnalysisLoading={hypoAnalysisLoading}
+                  loading={loading}
+                  fullStatus={fullStatus}
+                  prefetchStatus={prefetchStatus}
+                />
+              </aside>
+            )}
 
-        <EvalBar
-          score={
-            isHypothetical
-              ? (hypoAnalysis?.score || null)
-              : (currentAnalysis?.score_after || currentAnalysis?.score_before || null)
-          }
-          markerLegend={CLASS_MARKER_META}
-          classCounts={classCounts}
-          onClassCountClick={jumpToClassMove}
-          isFocusMode={isFocusMode}
-        />
+            <div className="analyzer-board-stage">
+              <BoardView
+                fen={displayFen === "start" ? "start" : displayFen}
+                boardOrientation={boardOrientation}
+                isFocusMode={isFocusMode}
+                arePiecesDraggable={Boolean(game)}
+                onPieceDrop={handleHypotheticalPieceDrop}
+                isHypothetical={isHypothetical}
+                hypoControls={{
+                  onUndo: handleUndoHypothetical,
+                  onRedo: handleRedoHypothetical,
+                  onReset: resetHypotheticalState,
+                  canUndo: hypoCursor > 0,
+                  canRedo: hypoCursor < hypoMoves.length,
+                }}
+                onToggleFocusMode={toggleFocusMode}
+                onFlipBoard={() => setBoardOrientation((o) => (o === "white" ? "black" : "white"))}
+                customArrows={boardMarkings.arrows}
+                customSquareStyles={boardMarkings.squareStyles}
+                classMarkers={isHypothetical ? [] : classMarkers}
+                onPrev={goPrev}
+                onNext={goNext}
+                canPrev={Boolean(game?.moves?.length && selectedPly > 1)}
+                canNext={Boolean(game?.moves?.length && selectedPly < game.moves.length)}
+                gameSummary={gameSummary}
+              />
+            </div>
 
-        {!isFocusMode && (
-          <AnalysisControls
-            mode={mode}
-            setMode={setMode}
-            limits={limits}
-            setLimits={setLimits}
-            onAnalyzeMove={handleAnalyzeSelectedMove}
-            onAnalyzeFull={handleAnalyzeFull}
-            onJumpToMistake={jumpToMistake}
-            isHypothetical={isHypothetical}
-            variationTrail={variationTrail}
-            onAnalyzeHypothetical={handleAnalyzeHypothetical}
-            onUndoHypo={handleUndoHypothetical}
-            onRedoHypo={handleRedoHypothetical}
-            onResetHypo={resetHypotheticalState}
-            canUndoHypo={hypoCursor > 0}
-            canRedoHypo={hypoCursor < hypoMoves.length}
-            hypoAnalysisLoading={hypoAnalysisLoading}
-            loading={loading}
-            fullStatus={fullStatus}
-            prefetchStatus={prefetchStatus}
-          />
-        )}
+            <aside className={`analyzer-right-rail${isFocusMode ? " analyzer-right-rail-focus" : ""}`}>
+              <EvalBar
+                score={
+                  isHypothetical
+                    ? (hypoAnalysis?.score || null)
+                    : (currentAnalysis?.score_after || currentAnalysis?.score_before || null)
+                }
+                markerLegend={CLASS_MARKER_META}
+                classCounts={classCounts}
+                onClassCountClick={jumpToClassMove}
+                isFocusMode={isFocusMode}
+              />
 
-        {!isFocusMode && (
-          <MoveList
-            moves={game?.moves || []}
-            selectedPly={selectedPly}
-            playerColor={playerColor}
-            onSelectPly={(ply) => {
-              if (isHypothetical) {
-                resetHypotheticalState();
-              }
-              setSelectedPly(ply);
-            }}
-          />
-        )}
-
-        {!isFocusMode && (
-          <MoveInsightsPanel
-            analysis={currentAnalysis}
-            isHypothetical={isHypothetical}
-            hypotheticalAnalysis={hypoAnalysis}
-            hypotheticalAnalysisLoading={hypoAnalysisLoading}
-            hypotheticalAnalysisError={hypoAnalysisError}
-          />
-        )}
-      </div>
+              {!isFocusMode && (
+                <>
+                  <MoveInsightsPanel
+                    analysis={currentAnalysis}
+                    isHypothetical={isHypothetical}
+                    hypotheticalAnalysis={hypoAnalysis}
+                    hypotheticalAnalysisLoading={hypoAnalysisLoading}
+                    hypotheticalAnalysisError={hypoAnalysisError}
+                  />
+                  <MoveList
+                    moves={game?.moves || []}
+                    selectedPly={selectedPly}
+                    playerColor={playerColor}
+                    classificationByPly={classificationByPly}
+                    markerLegend={CLASS_MARKER_META}
+                    onSelectPly={(ply) => {
+                      if (isHypothetical) {
+                        resetHypotheticalState();
+                      }
+                      setSelectedPly(ply);
+                    }}
+                  />
+                </>
+              )}
+            </aside>
+          </div>
+        </>
       )}
     </main>
   );

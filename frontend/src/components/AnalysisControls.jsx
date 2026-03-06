@@ -19,51 +19,72 @@ export default function AnalysisControls({
   fullStatus,
   prefetchStatus,
 }) {
+  const prefetchProgress = prefetchStatus?.total
+    ? Math.round((prefetchStatus.done / prefetchStatus.total) * 100)
+    : 0;
+  const fullProgress = Math.round((fullStatus?.progress || 0) * 100);
+
   return (
     <section className="panel controls-panel">
-      <h2>Analysis Controls</h2>
-      <div className="control-row">
-        <label>Mode</label>
-        <select value={mode} onChange={(e) => setMode(e.target.value)}>
-          <option value="realtime">Fast</option>
-          <option value="deep">Deep</option>
-        </select>
+      <div className="panel-head">
+        <h2>Engine Controls</h2>
+        <p>Tune speed vs depth and jump to critical moments.</p>
       </div>
-      <div className="control-row">
-        <label>User Side</label>
-        <div className="control-note">Bottom side of the board is always treated as User. Use Flip Board to switch.</div>
+
+      <div className="mode-toggle" role="tablist" aria-label="Analysis mode">
+        <button
+          type="button"
+          className={`mode-btn${mode === "realtime" ? " active" : ""}`}
+          onClick={() => setMode("realtime")}
+        >
+          Fast
+        </button>
+        <button
+          type="button"
+          className={`mode-btn${mode === "deep" ? " active" : ""}`}
+          onClick={() => setMode("deep")}
+        >
+          Deep
+        </button>
       </div>
-      <div className="control-row">
-        <label>Move time (ms)</label>
-        <input
-          type="number"
-          min={100}
-          value={limits.movetime_ms || ""}
-          onChange={(e) => setLimits({ ...limits, movetime_ms: Number(e.target.value) || null })}
-        />
+
+      <div className="limits-grid">
+        <label className="control-field">
+          <span>Move time (ms)</span>
+          <input
+            type="number"
+            min={100}
+            value={limits.movetime_ms || ""}
+            onChange={(event) => setLimits({ ...limits, movetime_ms: Number(event.target.value) || null })}
+          />
+        </label>
+        <label className="control-field">
+          <span>Depth</span>
+          <input
+            type="number"
+            min={1}
+            value={limits.depth || ""}
+            onChange={(event) => setLimits({ ...limits, depth: Number(event.target.value) || null })}
+          />
+        </label>
       </div>
-      <div className="control-row">
-        <label>Depth</label>
-        <input
-          type="number"
-          min={1}
-          value={limits.depth || ""}
-          onChange={(e) => setLimits({ ...limits, depth: Number(e.target.value) || null })}
-        />
+
+      <div className="control-note">
+        Bottom side is treated as User. Flip board to switch perspective.
+      </div>
+
+      <div className="button-row two-col">
+        <button disabled={loading || isHypothetical} onClick={onAnalyzeMove}>Analyze Move</button>
+        <button disabled={loading || isHypothetical} onClick={onAnalyzeFull}>Deep Scan</button>
       </div>
 
       <div className="button-row">
-        <button disabled={loading || isHypothetical} onClick={onAnalyzeMove}>Analyze Selected Move</button>
-        <button disabled={loading || isHypothetical} onClick={onAnalyzeFull}>Run Deep Full Analysis</button>
-      </div>
-
-      <div className="button-row">
-        <button onClick={onJumpToMistake}>Jump to Mistake</button>
+        <button onClick={onJumpToMistake}>Jump to First Mistake</button>
       </div>
 
       {isHypothetical && (
         <div className="job-status hypothetical-status">
-          <p><strong>Hypothetical Position</strong></p>
+          <p><strong>Hypothetical Branch</strong></p>
           {variationTrail?.length ? (
             <div className="variation-trail">
               {variationTrail.map((move, idx) => (
@@ -89,18 +110,30 @@ export default function AnalysisControls({
       )}
 
       {prefetchStatus?.total > 0 && (
-        <div className="job-status">
-          <p>
-            <strong>Insights Ready:</strong> {prefetchStatus.done}/{prefetchStatus.total}
-            {prefetchStatus.running ? " (analyzing...)" : " (ready)"}
-          </p>
+        <div className="job-status status-card">
+          <div className="status-row">
+            <strong>Prefetch</strong>
+            <span className="status-value">
+              {prefetchStatus.done}/{prefetchStatus.total}
+              {prefetchStatus.running ? " analyzing" : " ready"}
+            </span>
+          </div>
+          <div className="status-meter">
+            <span style={{ width: `${prefetchProgress}%` }} />
+          </div>
         </div>
       )}
 
       {fullStatus && (
-        <div className="job-status">
-          <p><strong>Status:</strong> {fullStatus.status}</p>
-          <p><strong>Progress:</strong> {Math.round((fullStatus.progress || 0) * 100)}%</p>
+        <div className="job-status status-card">
+          <div className="status-row">
+            <strong>Deep Analysis</strong>
+            <span className="status-value">{fullStatus.status}</span>
+          </div>
+          <div className="status-meter">
+            <span style={{ width: `${fullProgress}%` }} />
+          </div>
+          <p className="status-percent">{fullProgress}%</p>
         </div>
       )}
     </section>

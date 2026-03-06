@@ -24,7 +24,6 @@ export default function BoardView({
   isFocusMode,
   arePiecesDraggable,
   onPieceDrop,
-  onPieceDragBegin,
   isHypothetical,
   hypoControls,
   onToggleFocusMode,
@@ -36,6 +35,7 @@ export default function BoardView({
   onNext,
   canPrev,
   canNext,
+  gameSummary,
 }) {
   const wrapRef = useRef(null);
   const [boardSize, setBoardSize] = useState(560);
@@ -65,23 +65,43 @@ export default function BoardView({
 
   return (
     <section className={`panel board-panel${isFocusMode ? " focus-board-panel" : ""}`}>
-      <h2>Board</h2>
-      <button
-        className="focus-toggle-btn"
-        onClick={onToggleFocusMode}
-        title={isFocusMode ? "Exit Full Screen Focus" : "Open Full Screen Focus"}
-      >
-        {isFocusMode ? "✕" : "⛶"}
-      </button>
+      {!isFocusMode && gameSummary && (
+        <div className="board-summary">
+          <div className="board-summary-copy">
+            <p className="board-summary-title">{gameSummary.title}</p>
+            <p className="board-summary-subtitle">{gameSummary.subtitle}</p>
+          </div>
+          <div className="board-summary-pills">
+            {gameSummary.pills.map((pill) => (
+              <span key={`${pill.label}-${pill.value}`} className="board-meta-chip">
+                <strong>{pill.label}</strong>
+                {pill.value}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="board-panel-toolbar">
+        <h2>{isHypothetical ? "Variation Board" : "Analysis Board"}</h2>
+        <button
+          className="focus-toggle-btn"
+          onClick={onToggleFocusMode}
+          title={isFocusMode ? "Exit Full Screen Focus" : "Open Full Screen Focus"}
+        >
+          {isFocusMode ? "✕" : "⛶"}
+        </button>
+      </div>
       <div className="board-wrap" ref={wrapRef}>
-        <div className={`board-canvas${isHypothetical ? " hypothetical-board" : ""}`} style={{ width: `${boardSize}px`, height: `${boardSize}px` }}>
+        <div
+          className={`board-canvas${isHypothetical ? " hypothetical-board" : ""}`}
+          style={{ width: `${boardSize}px`, height: `${boardSize}px` }}
+        >
           {isHypothetical && <div className="hypothetical-badge">Hypothetical</div>}
           <Chessboard
             id="analysis-board"
             position={fen}
             arePiecesDraggable={Boolean(arePiecesDraggable)}
             onPieceDrop={onPieceDrop}
-            onPieceDragBegin={onPieceDragBegin}
             autoPromoteToQueen={true}
             boardWidth={boardSize}
             boardOrientation={boardOrientation}
@@ -155,7 +175,7 @@ export default function BoardView({
           onClick={onFlipBoard}
           title="Flip Board View"
         >
-          Flip Board
+          Flip
         </button>
       </div>
     </section>
