@@ -38,6 +38,14 @@ export const api = {
       signal: options.signal,
     }).then(parseResponse);
   },
+  explainMove(payload, options = {}) {
+    return fetch(`${API_BASE}/api/analysis/move-explanation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: options.signal,
+    }).then(parseResponse);
+  },
   analyzeMovesBatch(payload, options = {}) {
     return fetch(`${API_BASE}/api/analysis/moves-batch`, {
       method: "POST",

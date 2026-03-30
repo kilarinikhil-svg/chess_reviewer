@@ -17,6 +17,7 @@ class GameSession:
     headers: dict[str, str]
     created_at: float = field(default_factory=time.time)
     analysis_cache: dict[str, MoveAnalysisResponse] = field(default_factory=dict)
+    move_explanation_cache: dict[str, str] = field(default_factory=dict)
     cache_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 

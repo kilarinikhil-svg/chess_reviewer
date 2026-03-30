@@ -87,6 +87,31 @@ class Settings(BaseModel):
     coach_llm_model: str = os.getenv("COACH_LLM_MODEL", "gemini-2.0-flash-001")
     coach_llm_max_output_tokens: int = int(os.getenv("COACH_LLM_MAX_OUTPUT_TOKENS", "2048"))
     coach_use_llm: bool = env_bool("COACH_USE_LLM", True)
+
+    # Move explanation LLM (new names with legacy fallback support).
+    move_explanation_use_llm: bool = env_bool("MOVE_EXPLANATION_USE_LLM", env_bool("MOVE_USE_LLM", False))
+    move_explanation_model: str = os.getenv(
+        "MOVE_EXPLANATION_MODEL",
+        os.getenv("MOVE_LLM_MODEL", "gemini-2.0-flash-001"),
+    )
+    move_explanation_max_output_tokens: int = int(
+        os.getenv(
+            "MOVE_EXPLANATION_MAX_OUTPUT_TOKENS",
+            os.getenv("MOVE_LLM_MAX_OUTPUT_TOKENS", "2048"),
+        )
+    )
+    move_explanation_timeout_seconds: int = int(
+        os.getenv(
+            "MOVE_EXPLANATION_TIMEOUT_SECONDS",
+            os.getenv("MOVE_LLM_TIMEOUT_SECONDS", "30"),
+        )
+    )
+    move_explanation_prompt_version: str = os.getenv(
+        "MOVE_EXPLANATION_PROMPT_VERSION",
+        os.getenv("MOVE_LLM_PROMPT_VERSION", "v1"),
+    )
+
+    # Deprecated move-analysis LLM settings retained for backward compatibility only.
     move_use_llm: bool = env_bool("MOVE_USE_LLM", False)
     move_llm_model: str = os.getenv("MOVE_LLM_MODEL", "gemini-2.0-flash-001")
     move_llm_max_output_tokens: int = int(os.getenv("MOVE_LLM_MAX_OUTPUT_TOKENS", "2048"))

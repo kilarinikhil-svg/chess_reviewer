@@ -22,6 +22,8 @@ from app.models.schemas import (
     ImportPgnRequest,
     MoveBatchAnalysisRequest,
     MoveBatchAnalysisResponse,
+    MoveExplanationRequest,
+    MoveExplanationResponse,
     MoveAnalysisRequest,
     MoveAnalysisResponse,
 )
@@ -31,6 +33,7 @@ from app.services.coach_analysis import analyze_multi_game_pgn
 from app.services.engine import engine_service
 from app.services.game_parser import parse_pgn_or_fen
 from app.services.move_analysis import move_analysis_service
+from app.services.move_explanation import move_explanation_service
 from app.services.session_store import session_store
 
 app = FastAPI(title="Chess Analyzer API", version="0.1.0")
@@ -123,6 +126,27 @@ async def analyze_move(req: MoveAnalysisRequest) -> MoveAnalysisResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/analysis/move-explanation", response_model=MoveExplanationResponse)
+async def analyze_move_explanation(req: MoveExplanationRequest) -> MoveExplanationResponse:
+    session = session_store.get(req.game_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="game_id not found")
+    if req.ply < 1 or req.ply > len(session.moves):
+        raise HTTPException(status_code=400, detail="ply out of range")
+
+    try:
+        return await move_explanation_service.explain_move(
+            session=session,
+            ply=req.ply,
+            mode=req.mode,
+            limits=req.limits,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/api/analysis/moves-batch", response_model=MoveBatchAnalysisResponse)

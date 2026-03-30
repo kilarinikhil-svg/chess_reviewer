@@ -127,6 +127,9 @@ export default function App() {
   const [mode, setMode] = useState(() => getInitialAnalysisMode());
   const [limits, setLimits] = useState({ movetime_ms: 2000, depth: 20, nodes: null, multipv: 1 });
   const [analysisByKey, setAnalysisByKey] = useState({});
+  const [explanationsByKey, setExplanationsByKey] = useState({});
+  const [explanationLoadingByKey, setExplanationLoadingByKey] = useState({});
+  const [explanationErrorByKey, setExplanationErrorByKey] = useState({});
   const [archives, setArchives] = useState([]);
   const [loading, setLoading] = useState(false);
   const [fullStatus, setFullStatus] = useState(null);
@@ -143,7 +146,9 @@ export default function App() {
   const [hypoAnalysisLoading, setHypoAnalysisLoading] = useState(false);
   const [hypoAnalysisError, setHypoAnalysisError] = useState("");
   const analysisRef = useRef({});
+  const explanationsRef = useRef({});
   const pendingRequestsRef = useRef(new Map());
+  const pendingExplanationRequestsRef = useRef(new Map());
   const prefetchRunRef = useRef(0);
   const prefetchAbortControllerRef = useRef(null);
   const audioCtxRef = useRef(null);
@@ -173,7 +178,11 @@ export default function App() {
 
   const currentFen = game ? fenTimeline[selectedPly] || game.initial_fen : "start";
   const displayFen = isHypothetical ? (hypoFen || currentFen) : currentFen;
-  const currentAnalysis = analysisByKey[getAnalysisKey(selectedPly)] || null;
+  const currentAnalysisKey = getAnalysisKey(selectedPly);
+  const currentAnalysis = analysisByKey[currentAnalysisKey] || null;
+  const currentExplanation = explanationsByKey[currentAnalysisKey] || "";
+  const currentExplanationLoading = Boolean(explanationLoadingByKey[currentAnalysisKey]);
+  const currentExplanationError = explanationErrorByKey[currentAnalysisKey] || "";
   const currentMove = game?.moves?.[selectedPly - 1] || null;
   const currentMoveTarget = parseUciSquares(currentMove?.uci)?.to;
   const variationTrail = hypoMoves.slice(0, hypoCursor);
@@ -365,9 +374,36 @@ export default function App() {
     setSelectedPly(1);
     setAnalysisByKey({});
     analysisRef.current = {};
+    setExplanationsByKey({});
+    explanationsRef.current = {};
+    setExplanationLoadingByKey({});
+    setExplanationErrorByKey({});
+    pendingExplanationRequestsRef.current.clear();
     lastMoveSoundPlyRef.current = null;
     setFullStatus(null);
     setPrefetchStatus({ running: false, done: 0, total: imported.moves?.length || 0 });
+  }
+
+  function clearExplanationForKey(key) {
+    setExplanationsByKey((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      explanationsRef.current = next;
+      return next;
+    });
+    setExplanationLoadingByKey((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setExplanationErrorByKey((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   }
 
   function playMoveTick() {
@@ -578,10 +614,91 @@ export default function App() {
     return promise;
   }
 
+  async function explainMoveForSession(
+    session,
+    ply,
+    analysisMode,
+    analysisLimits,
+    { force = false, signal = null } = {}
+  ) {
+    if (!session) return null;
+    const key = getAnalysisKey(ply, analysisMode, buildLimitsKey(analysisLimits));
+
+    if (!force && explanationsRef.current[key]) {
+      return explanationsRef.current[key];
+    }
+
+    const pending = pendingExplanationRequestsRef.current.get(key);
+    if (pending) {
+      return pending.promise;
+    }
+
+    const promise = (async () => {
+      setExplanationLoadingByKey((prev) => ({ ...prev, [key]: true }));
+      setExplanationErrorByKey((prev) => {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      try {
+        const data = await api.explainMove(
+          {
+            game_id: session.game_id,
+            ply,
+            mode: analysisMode,
+            limits: analysisLimits,
+          },
+          { signal }
+        );
+        const explanation = String(data?.explanation || "").trim();
+        if (!explanation) {
+          throw new Error("No explanation returned");
+        }
+        setExplanationsByKey((prev) => {
+          if (!force && prev[key]) {
+            explanationsRef.current = prev;
+            return prev;
+          }
+          const next = { ...prev, [key]: explanation };
+          explanationsRef.current = next;
+          return next;
+        });
+        return explanation;
+      } catch (err) {
+        if (isAbortError(err)) {
+          return null;
+        }
+        setExplanationErrorByKey((prev) => ({
+          ...prev,
+          [key]: err.message || "Failed to generate explanation",
+        }));
+        throw err;
+      } finally {
+        setExplanationLoadingByKey((prev) => {
+          if (!(key in prev)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+        const active = pendingExplanationRequestsRef.current.get(key);
+        if (active?.promise === promise) {
+          pendingExplanationRequestsRef.current.delete(key);
+        }
+      }
+    })();
+
+    pendingExplanationRequestsRef.current.set(key, { promise });
+    return promise;
+  }
+
   async function handleAnalyzeSelectedMove() {
     if (!game || selectedPly < 1 || selectedPly > game.moves.length) return;
     await withLoading(async () => {
+      const key = getAnalysisKey(selectedPly, mode, buildLimitsKey(limits));
+      clearExplanationForKey(key);
       await analyzeMoveForSession(game, selectedPly, mode, limits, { force: true, source: "interactive" });
+      explainMoveForSession(game, selectedPly, mode, limits, { force: true }).catch(() => {});
     });
   }
 
@@ -796,6 +913,27 @@ export default function App() {
   }, [selectedPly, game?.game_id, mode, limitsKey]);
 
   useEffect(() => {
+    if (!game || isHypothetical || selectedPly < 1 || selectedPly > game.moves.length) {
+      return;
+    }
+    if (!currentAnalysis || currentExplanation || currentExplanationLoading || currentExplanationError) {
+      return;
+    }
+    explainMoveForSession(game, selectedPly, mode, limits).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedPly,
+    game?.game_id,
+    mode,
+    limitsKey,
+    isHypothetical,
+    currentAnalysis,
+    currentExplanation,
+    currentExplanationLoading,
+    currentExplanationError,
+  ]);
+
+  useEffect(() => {
     const onKeyDown = (event) => {
       if (!game || !game.moves?.length) return;
       const active = document.activeElement;
@@ -980,6 +1118,9 @@ export default function App() {
                 <>
                   <MoveInsightsPanel
                     analysis={currentAnalysis}
+                    explanation={currentExplanation}
+                    explanationLoading={currentExplanationLoading}
+                    explanationError={currentExplanationError}
                     isHypothetical={isHypothetical}
                     hypotheticalAnalysis={hypoAnalysis}
                     hypotheticalAnalysisLoading={hypoAnalysisLoading}

@@ -21,12 +21,12 @@ _MODEL_CACHE_LOCK = threading.Lock()
 
 
 def llm_enabled() -> bool:
-    return bool(settings.move_use_llm and settings.google_application_credentials_b64)
+    return bool(settings.move_explanation_use_llm and settings.google_application_credentials_b64)
 
 
-def build_llm_move_report(payload: dict[str, Any]) -> dict[str, Any] | None:
+def build_llm_move_explanation(payload: dict[str, Any]) -> str | None:
     if not llm_enabled():
-        logger.info("Move LLM disabled or missing credentials")
+        logger.info("Move explanation LLM disabled or missing credentials")
         return None
 
     raw = ""
@@ -38,44 +38,30 @@ def build_llm_move_report(payload: dict[str, Any]) -> dict[str, Any] | None:
         raw = _extract_response_text(getattr(response, "content", response))
         parsed = _parse_json_object(raw)
     except Exception:
-        logger.exception("Move LLM call failed")
+        logger.exception("Move explanation LLM call failed")
         return None
-
-    if parsed is None:
-        logger.warning("Move LLM returned non-JSON output")
-        return None
-
-    if isinstance(parsed, list):
-        return {"moves": parsed}
 
     if not isinstance(parsed, dict):
+        logger.warning("Move explanation LLM returned non-JSON output")
         return None
 
-    moves = parsed.get("moves")
-    if isinstance(moves, list):
-        return parsed
+    explanation = _clean_text(parsed.get("explanation"), max_len=600)
+    if not explanation:
+        logger.warning("Move explanation LLM response missing explanation field")
+        return None
 
-    if all(str(key).isdigit() for key in parsed.keys()):
-        keyed_moves = []
-        for key, value in parsed.items():
-            if isinstance(value, dict):
-                move = dict(value)
-                move.setdefault("ply", int(key))
-                keyed_moves.append(move)
-        return {"moves": keyed_moves}
-
-    return None
+    return explanation
 
 
 def _get_llm_runtime() -> tuple[Any, Any]:
     global _MODEL_CACHE_KEY, _MODEL_CACHE, _PROMPT_CACHE
 
     cache_key = (
-        settings.move_llm_model,
+        settings.move_explanation_model,
         settings.google_cloud_project,
         settings.google_cloud_location,
-        settings.move_llm_max_output_tokens,
-        settings.move_llm_prompt_version,
+        settings.move_explanation_max_output_tokens,
+        settings.move_explanation_prompt_version,
     )
     if _MODEL_CACHE_KEY == cache_key and _MODEL_CACHE is not None and _PROMPT_CACHE is not None:
         return _MODEL_CACHE, _PROMPT_CACHE
@@ -96,11 +82,11 @@ def _get_llm_runtime() -> tuple[Any, Any]:
             ]
         )
         model = ChatVertexAI(
-            model=settings.move_llm_model,
+            model=settings.move_explanation_model,
             project=settings.google_cloud_project,
             location=settings.google_cloud_location,
             temperature=0,
-            max_output_tokens=settings.move_llm_max_output_tokens,
+            max_output_tokens=settings.move_explanation_max_output_tokens,
         )
 
         _MODEL_CACHE_KEY = cache_key
@@ -168,3 +154,12 @@ def _extract_response_text(content: Any) -> str:
                     parts.append(str(text))
         return "\n".join(parts)
     return str(content)
+
+
+def _clean_text(value: object, max_len: int) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3].rstrip() + "..."

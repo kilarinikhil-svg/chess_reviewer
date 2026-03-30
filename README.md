@@ -6,7 +6,8 @@ Chess.com-style analyzer with a JavaScript frontend and Python FastAPI backend u
 - PGN/FEN import.
 - Chess.com archive import by username.
 - Move-by-move analysis with best move, PV, classification, and suggestion.
-- Batched move prefetch endpoint for lower latency/cost with optional LLM-first analysis.
+- Optional LLM move explanation endpoint that explains Stockfish's suggested move.
+- Batched move prefetch endpoint for lower latency/cost.
 - Deep full-game analysis job with progress polling.
 - Ephemeral session model (no login).
 
@@ -96,14 +97,12 @@ Set backend environment variables in Render:
   - `GOOGLE_CLOUD_LOCATION=us-central1`
   - `COACH_LLM_MODEL=gemini-2.0-flash-001`
   - `COACH_LLM_MAX_OUTPUT_TOKENS=2048`
-  - Optional move LLM:
-  - `MOVE_USE_LLM=true`
-  - `MOVE_LLM_MODEL=gemini-2.5-flash`
-  - `MOVE_LLM_MAX_OUTPUT_TOKENS=2048`
-  - `MOVE_LLM_TIMEOUT_SECONDS=30`
-  - `MOVE_BATCH_CHUNK_SIZE=4`
-  - `MOVE_LLM_MAX_CONCURRENCY=2`
-  - `MOVE_LLM_PROMPT_VERSION=v1`
+- Optional move explanation LLM:
+  - `MOVE_EXPLANATION_USE_LLM=true`
+  - `MOVE_EXPLANATION_MODEL=gemini-2.5-flash`
+  - `MOVE_EXPLANATION_MAX_OUTPUT_TOKENS=2048`
+  - `MOVE_EXPLANATION_TIMEOUT_SECONDS=30`
+  - `MOVE_EXPLANATION_PROMPT_VERSION=v1`
 
 Use `backend/.env.example` as a reference; keep real secrets only in Render env vars.
 
@@ -125,6 +124,7 @@ Use `frontend/.env.example` as a reference.
 - Frontend loads from Vercel and can:
   - import PGN
   - run move analysis
+  - generate move explanation
   - start and poll full analysis
 
 ### Performance Profile
@@ -214,6 +214,7 @@ If these variables are missing or the LLM response is invalid, the coach endpoin
 - `POST /api/games/import/chesscom`
 - `POST /api/games/import/chesscom/select`
 - `POST /api/analysis/move`
+- `POST /api/analysis/move-explanation`
 - `POST /api/analysis/moves-batch`
 - `POST /api/analysis/fen`
 - `POST /api/analysis/full`

@@ -14,6 +14,9 @@ function formatDelta(deltaCp) {
 
 export default function MoveInsightsPanel({
   analysis,
+  explanation = "",
+  explanationLoading = false,
+  explanationError = "",
   isHypothetical = false,
   hypotheticalAnalysis = null,
   hypotheticalAnalysisLoading = false,
@@ -95,8 +98,12 @@ export default function MoveInsightsPanel({
                 {active.fallback_reason ? ` (fallback: ${active.fallback_reason})` : ""}
               </p>
             )}
-            {!isHypothetical && active.explanation && (
-              <p className="control-note">{active.explanation}</p>
+            {!isHypothetical && explanationLoading && <p className="control-note">Generating explanation...</p>}
+            {!isHypothetical && !explanationLoading && explanationError && (
+              <p className="warning">{explanationError}</p>
+            )}
+            {!isHypothetical && !explanationLoading && explanation && (
+              <p className="control-note">{explanation}</p>
             )}
           </div>
 

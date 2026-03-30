@@ -72,12 +72,24 @@ class MoveAnalysisResponse(BaseModel):
     classification: Literal["best", "good", "inaccuracy", "mistake", "blunder"]
     pv: list[str]
     suggestion: str
-    analysis_source: Literal["stockfish", "llm"] = "stockfish"
+    analysis_source: Literal["stockfish"] = "stockfish"
     explanation: Optional[str] = None
     confidence: Optional[float] = None
     themes: list[str] = Field(default_factory=list)
     fallback_reason: Optional[str] = None
     analysis_incomplete: bool = False
+
+
+class MoveExplanationRequest(BaseModel):
+    game_id: str
+    ply: int
+    mode: Literal["realtime", "deep"] = "realtime"
+    limits: AnalysisLimits = Field(default_factory=AnalysisLimits)
+
+
+class MoveExplanationResponse(BaseModel):
+    ply: int
+    explanation: str
 
 
 class MoveBatchAnalysisRequest(BaseModel):
